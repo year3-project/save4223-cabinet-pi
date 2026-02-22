@@ -1,0 +1,593 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Smart Cabinet - Test Panel</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f5f5f5;
+      padding: 20px;
+    }
+    
+    h1 {
+      color: #003974;
+      margin-bottom: 20px;
+    }
+    
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+      margin-bottom: 20px;
+    }
+    
+    .panel {
+      background: white;
+      border-radius: 8px;
+      padding: 20px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    
+    .panel h2 {
+      color: #003974;
+      font-size: 16px;
+      margin-bottom: 15px;
+      padding-bottom: 10px;
+      border-bottom: 2px solid #F1F7FF;
+    }
+    
+    .status-badge {
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    
+    .status-online { background: #86efac; color: #14532d; }
+    .status-offline { background: #fca5a5; color: #7f1d1d; }
+    
+    button {
+      background: #003974;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+      margin: 5px;
+      transition: opacity 0.2s;
+    }
+    
+    button:hover { opacity: 0.9; }
+    button:disabled { background: #ccc; cursor: not-allowed; }
+    
+    button.secondary {
+      background: #F1F7FF;
+      color: #003974;
+      border: 1px solid #003974;
+    }
+    
+    button.success { background: #16a34a; }
+    button.warning { background: #f59e0b; }
+    button.danger { background: #dc2626; }
+    
+    .data-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+    
+    .data-table th,
+    .data-table td {
+      padding: 8px;
+      text-align: left;
+      border-bottom: 1px solid #e5e5e5;
+    }
+    
+    .data-table th {
+      background: #F1F7FF;
+      color: #003974;
+      font-weight: 600;
+    }
+    
+    .data-table tr:hover { background: #fafafa; }
+    
+    .empty-state {
+      text-align: center;
+      padding: 40px;
+      color: #666;
+    }
+    
+    .log-container {
+      background: #1a1a1a;
+      color: #00ff00;
+      font-family: 'Courier New', monospace;
+      padding: 15px;
+      border-radius: 6px;
+      height: 200px;
+      overflow-y: auto;
+      font-size: 12px;
+    }
+    
+    .log-entry {
+      margin: 2px 0;
+      padding: 2px 0;
+    }
+    
+    .log-time { color: #888; margin-right: 8px; }
+    .log-info { color: #00ff00; }
+    .log-error { color: #ff6666; }
+    .log-warn { color: #ffaa00; }
+    
+    .state-diagram {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      padding: 20px;
+      background: #fafafa;
+      border-radius: 6px;
+      margin: 15px 0;
+    }
+    
+    .state-node {
+      padding: 10px 20px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 600;
+      background: #e5e5e5;
+      color: #666;
+    }
+    
+    .state-node.active {
+      background: #003974;
+      color: white;
+      box-shadow: 0 0 10px rgba(0, 57, 116, 0.3);
+    }
+    
+    .state-arrow {
+      color: #999;
+      font-size: 20px;
+    }
+    
+    .json-view {
+      background: #f5f5f5;
+      padding: 10px;
+      border-radius: 4px;
+      font-family: 'Courier New', monospace;
+      font-size: 11px;
+      overflow-x: auto;
+      max-height: 150px;
+      overflow-y: auto;
+    }
+    
+    .tag {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      margin: 2px;
+    }
+    
+    .tag-borrowed { background: #fee2e2; color: #dc2626; }
+    .tag-returned { background: #dcfce7; color: #16a34a; }
+    .tag-pending { background: #fef3c7; color: #d97706; }
+    
+    .refresh-btn {
+      float: right;
+      padding: 4px 12px;
+      font-size: 12px;
+    }
+    
+    .section {
+      margin-bottom: 15px;
+    }
+    
+    .section-title {
+      font-weight: 600;
+      color: #666;
+      margin-bottom: 8px;
+      font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+  <h1>🔧 Smart Cabinet - Test Panel</h1>
+  
+  <!-- Status Row -->
+  <div class="grid">
+    <div class="panel">
+      <h2>System Status <button class="refresh-btn secondary" onclick="refreshAll()">🔄 Refresh</button></h2>
+      <div style="margin: 15px 0;">
+        <span class="section-title">Server Connection:</span>
+        <span id="server-status" class="status-badge status-offline">Checking...</span>
+      </div>
+      <div style="margin: 15px 0;">
+        <span class="section-title">Current State:</span>
+        <div class="state-diagram">
+          <div class="state-node" id="state-locked">LOCKED</div>
+          <span class="state-arrow">→</span>
+          <div class="state-node" id="state-auth">AUTH</div>
+          <span class="state-arrow">→</span>
+          <div class="state-node" id="state-unlocked">UNLOCKED</div>
+          <span class="state-arrow">→</span>
+          <div class="state-node" id="state-scanning">SCANNING</div>
+        </div>
+      </div>
+      <div id="current-session" style="margin-top: 15px; padding: 10px; background: #F1F7FF; border-radius: 6px;">
+        <strong>Current Session:</strong> <span id="session-id">None</span>
+      </div>
+    </div>
+    
+    <div class="panel">
+      <h2>Simulate Actions</h2>
+      <div class="section">
+        <div class="section-title">1. Authentication</div>
+        <button onclick="simulateAuth('TEST123')">Card: TEST123</button>
+        <button onclick="simulateAuth('CARD456')">Card: CARD456</button>
+        <button class="secondary" onclick="simulateAuth('INVALID')">Invalid Card</button>
+      </div>
+      
+      <div class="section">
+        <div class="section-title">2. Cabinet Operations</div>
+        <button class="success" onclick="simulateUnlock()">🔓 Unlock</button>
+        <button class="danger" onclick="simulateLock()">🔒 Lock</button>
+        <button class="warning" onclick="simulateScan()">📡 RFID Scan</button>
+      </div>
+      
+      <div class="section">
+        <div class="section-title">3. Sync Control</div>
+        <button onclick="triggerSync()">🔄 Force Sync</button>
+        <button class="secondary" onclick="clearPending()">🗑 Clear Queue</button>
+      </div>
+    </div>
+  </div>
+  
+  <!-- Database Views -->
+  <div class="grid">
+    <div class="panel">
+      <h2>Local Database - Session Diffs</h2>
+      <div id="session-diffs">
+        <div class="empty-state">No session diffs recorded</div>
+      </div>
+    </div>
+    
+    <div class="panel">
+      <h2>Local Database - Pending Sync</h2>
+      <div id="pending-sync">
+        <div class="empty-state">No pending sync items</div>
+      </div>
+    </div>
+  </div>
+  
+  <div class="grid">
+    <div class="panel">
+      <h2>Item Cache (Local State)</h2>
+      <div id="item-cache">
+        <div class="empty-state">No cached items</div>
+      </div>
+    </div>
+    
+    <div class="panel">
+      <h2>RFID Snapshots</h2>
+      <div id="rfid-snapshots">
+        <div class="empty-state">No snapshots recorded</div>
+      </div>
+    </div>
+  </div>
+  
+  <!-- Log Panel -->
+  <div class="panel" style="grid-column: 1 / -1;">
+    <h2>Event Log <button class="refresh-btn secondary" onclick="clearLogs()">Clear</button></h2>
+    <div id="log-container" class="log-container">
+      <div class="log-entry"><span class="log-time">[SYSTEM]</span> Test panel initialized</div>
+    </div>
+  </div>
+
+  <script>
+    // Mock data storage
+    const mockDB = {
+      sessionDiffs: [],
+      pendingSync: [],
+      itemCache: [
+        { rfid_tag: 'RFID-OSC-001', item_id: 'item-1', name: 'Oscilloscope #1', status: 'BORROWED', holder_id: '550e8400...' },
+        { rfid_tag: 'RFID-OSC-002', item_id: 'item-2', name: 'Oscilloscope #2', status: 'AVAILABLE', holder_id: null },
+        { rfid_tag: 'RFID-OSC-003', item_id: 'item-3', name: 'Oscilloscope #3', status: 'AVAILABLE', holder_id: null },
+        { rfid_tag: 'RFID-TOOL-001', item_id: 'item-4', name: 'Screwdriver Set', status: 'AVAILABLE', holder_id: null },
+        { rfid_tag: 'RFID-MUL-001', item_id: 'item-5', name: 'Multimeter #1', status: 'BORROWED', holder_id: '550e8400...' },
+        { rfid_tag: 'RFID-MUL-002', item_id: 'item-6', name: 'Multimeter #2', status: 'AVAILABLE', holder_id: null },
+      ],
+      snapshots: [],
+      currentState: 'LOCKED',
+      currentSession: null
+    };
+    
+    // Logger
+    function log(message, type = 'info') {
+      const container = document.getElementById('log-container');
+      const time = new Date().toLocaleTimeString();
+      const entry = document.createElement('div');
+      entry.className = 'log-entry';
+      entry.innerHTML = `<span class="log-time">[${time}]</span> <span class="log-${type}">${message}</span>`;
+      container.appendChild(entry);
+      container.scrollTop = container.scrollHeight;
+    }
+    
+    function clearLogs() {
+      document.getElementById('log-container').innerHTML = '';
+    }
+    
+    // State management
+    function updateStateDisplay() {
+      const states = ['locked', 'auth', 'unlocked', 'scanning'];
+      states.forEach(s => {
+        const el = document.getElementById(`state-${s}`);
+        el.classList.toggle('active', mockDB.currentState.toLowerCase().includes(s) || 
+          (s === 'auth' && mockDB.currentState === 'AUTHENTICATING'));
+      });
+      
+      document.getElementById('session-id').textContent = mockDB.currentSession || 'None';
+    }
+    
+    function setState(state) {
+      mockDB.currentState = state;
+      updateStateDisplay();
+      log(`State changed to: ${state}`, 'info');
+    }
+    
+    // Simulate actions
+    async function simulateAuth(cardId) {
+      log(`Simulating card tap: ${cardId}`, 'info');
+      setState('AUTHENTICATING');
+      
+      await sleep(1000);
+      
+      if (cardId === 'INVALID') {
+        log('Authentication failed: Card not registered', 'error');
+        setState('LOCKED');
+        return;
+      }
+      
+      mockDB.currentSession = 'session-' + Date.now().toString(36);
+      log(`Authentication success! Session: ${mockDB.currentSession}`, 'info');
+      
+      // Auto transition to unlocked
+      simulateUnlock();
+    }
+    
+    function simulateUnlock() {
+      setState('UNLOCKED');
+      log('Cabinet unlocked. User can take/return items.', 'info');
+      
+      // Auto lock after 10 seconds for demo
+      setTimeout(() => {
+        if (mockDB.currentState === 'UNLOCKED') {
+          log('Auto-locking after timeout...', 'warn');
+          simulateScan();
+        }
+      }, 10000);
+    }
+    
+    function simulateLock() {
+      setState('LOCKED');
+      log('Cabinet locked.', 'info');
+    }
+    
+    async function simulateScan() {
+      setState('SCANNING');
+      log('Starting RFID scan...', 'info');
+      
+      await sleep(1500);
+      
+      // Simulate RFID tags detected
+      const detectedTags = ['RFID-OSC-001', 'RFID-OSC-003', 'RFID-MUL-002'];
+      log(`Scan complete. Detected ${detectedTags.length} tags: ${detectedTags.join(', ')}`, 'info');
+      
+      // Calculate diff
+      const borrowed = [
+        { rfid: 'RFID-OSC-002', item_id: 'item-2', name: 'Oscilloscope #2' }
+      ];
+      const returned = [
+        { rfid: 'RFID-MUL-001', item_id: 'item-5', name: 'Multimeter #1' }
+      ];
+      
+      // Save to mock DB
+      const diff = {
+        session_id: mockDB.currentSession,
+        borrowed,
+        returned,
+        created_at: new Date().toISOString(),
+        synced: false
+      };
+      mockDB.sessionDiffs.unshift(diff);
+      
+      // Add to pending sync
+      mockDB.pendingSync.push({
+        id: Date.now(),
+        session_id: mockDB.currentSession,
+        rfids: detectedTags,
+        retry_count: 0,
+        created_at: new Date().toISOString()
+      });
+      
+      log(`Diff calculated: ${borrowed.length} borrowed, ${returned.length} returned`, 'info');
+      
+      // Show to user
+      showItemSummary(borrowed, returned);
+      
+      // Update UI
+      renderSessionDiffs();
+      renderPendingSync();
+      
+      // Try sync
+      await trySync();
+      
+      // Return to locked
+      await sleep(5000);
+      simulateLock();
+    }
+    
+    function showItemSummary(borrowed, returned) {
+      let msg = '📦 Checkout Summary:\n';
+      if (borrowed.length) {
+        msg += `\n📤 Borrowed (${borrowed.length}):\n`;
+        borrowed.forEach(i => msg += `  - ${i.name}\n`);
+      }
+      if (returned.length) {
+        msg += `\n📥 Returned (${returned.length}):\n`;
+        returned.forEach(i => msg += `  - ${i.name}\n`);
+      }
+      log(msg, 'info');
+    }
+    
+    async function trySync() {
+      log('Attempting to sync with server...', 'info');
+      await sleep(1000);
+      
+      const online = Math.random() > 0.3; // 70% chance online
+      
+      if (online) {
+        log('✅ Sync successful!', 'info');
+        // Mark as synced
+        mockDB.sessionDiffs.forEach(d => d.synced = true);
+        mockDB.pendingSync = [];
+        renderSessionDiffs();
+        renderPendingSync();
+      } else {
+        log('❌ Sync failed (offline). Queued for retry.', 'error');
+      }
+    }
+    
+    async function triggerSync() {
+      log('Manual sync triggered...', 'warn');
+      await trySync();
+    }
+    
+    function clearPending() {
+      mockDB.pendingSync = [];
+      renderPendingSync();
+      log('Pending sync queue cleared', 'warn');
+    }
+    
+    // Render functions
+    function renderSessionDiffs() {
+      const container = document.getElementById('session-diffs');
+      if (!mockDB.sessionDiffs.length) {
+        container.innerHTML = '<div class="empty-state">No session diffs recorded</div>';
+        return;
+      }
+      
+      container.innerHTML = `
+        <table class="data-table">
+          <tr>
+            <th>Session</th>
+            <th>Borrowed</th>
+            <th>Returned</th>
+            <th>Status</th>
+          </tr>
+          ${mockDB.sessionDiffs.map(d => `
+            <tr>
+              <td>${d.session_id.slice(-8)}</td>
+              <td>${d.borrowed.map(i => `<span class="tag tag-borrowed">${i.name}</span>`).join('')}</td>
+              <td>${d.returned.map(i => `<span class="tag tag-returned">${i.name}</span>`).join('')}</td>
+              <td>${d.synced ? '✅ Synced' : '<span class="tag tag-pending">Pending</span>'}</td>
+            </tr>
+          `).join('')}
+        </table>
+      `;
+    }
+    
+    function renderPendingSync() {
+      const container = document.getElementById('pending-sync');
+      if (!mockDB.pendingSync.length) {
+        container.innerHTML = '<div class="empty-state">No pending sync items</div>';
+        return;
+      }
+      
+      container.innerHTML = `
+        <table class="data-table">
+          <tr>
+            <th>Session</th>
+            <th>Tags</th>
+            <th>Retries</th>
+            <th>Created</th>
+          </tr>
+          ${mockDB.pendingSync.map(p => `
+            <tr>
+              <td>${p.session_id.slice(-8)}</td>
+              <td>${p.rfids.length} tags</td>
+              <td>${p.retry_count}</td>
+              <td>${new Date(p.created_at).toLocaleTimeString()}</td>
+            </tr>
+          `).join('')}
+        </table>
+      `;
+    }
+    
+    function renderItemCache() {
+      const container = document.getElementById('item-cache');
+      container.innerHTML = `
+        <table class="data-table">
+          <tr>
+            <th>RFID</th>
+            <th>Name</th>
+            <th>Status</th>
+            <th>Holder</th>
+          </tr>
+          ${mockDB.itemCache.map(item => `
+            <tr>
+              <td>${item.rfid_tag}</td>
+              <td>${item.name}</td>
+              <td><span class="tag ${item.status === 'AVAILABLE' ? 'tag-returned' : 'tag-borrowed'}">${item.status}</span></td>
+              <td>${item.holder_id ? item.holder_id.slice(-8) + '...' : '-'}</td>
+            </tr>
+          `).join('')}
+        </table>
+      `;
+    }
+    
+    // Utils
+    function sleep(ms) {
+      return new Promise(resolve => setTimeout(resolve, ms));
+    }
+    
+    function refreshAll() {
+      renderSessionDiffs();
+      renderPendingSync();
+      renderItemCache();
+      updateStateDisplay();
+      log('Data refreshed', 'info');
+    }
+    
+    // Check server status periodically
+    async function checkServerStatus() {
+      try {
+        const response = await fetch('http://localhost:3001/api/health', { 
+          method: 'GET',
+          headers: { 'Authorization': 'Bearer edge_device_secret_key' }
+        });
+        const online = response.ok;
+        const badge = document.getElementById('server-status');
+        badge.textContent = online ? 'Online' : 'Offline';
+        badge.className = 'status-badge ' + (online ? 'status-online' : 'status-offline');
+      } catch (e) {
+        const badge = document.getElementById('server-status');
+        badge.textContent = 'Offline (Mock Mode)';
+        badge.className = 'status-badge status-offline';
+      }
+    }
+    
+    // Init
+    setInterval(checkServerStatus, 5000);
+    checkServerStatus();
+    renderItemCache();
+    updateStateDisplay();
+    log('Test panel ready. Click buttons to simulate actions.', 'info');
+  </script>
+</body>
+</html>
