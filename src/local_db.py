@@ -150,16 +150,27 @@ class LocalDB:
         logger.info(f"Saved RFID snapshot: {len(rfids)} tags for session {session_id[:8]}")
     
     def get_last_snapshot(self, cabinet_id: int, before_session: Optional[str] = None) -> Set[str]:
-        """Get RFID tags from last session for this cabinet."""
+        """Get RFID tags from most recent session snapshot."""
+        # Get the most recent session (excluding current one if specified)
         query = '''
-            SELECT rfid_tag FROM rfid_snapshots 
+            SELECT DISTINCT session_id FROM rfid_snapshots 
             WHERE cabinet_id = ? AND session_id != ?
-            AND captured_at = (
-                SELECT MAX(captured_at) FROM rfid_snapshots 
-                WHERE cabinet_id = ? AND session_id != ?
-            )
+            ORDER BY captured_at DESC
+            LIMIT 1
         '''
-        rows = self._conn.execute(query, (cabinet_id, before_session or '', cabinet_id, before_session or '')).fetchall()
+        row = self._conn.execute(query, (cabinet_id, before_session or '')).fetchone()
+        
+        if not row:
+            return set()
+        
+        last_session_id = row['session_id']
+        
+        # Get all tags from that session
+        rows = self._conn.execute(
+            'SELECT rfid_tag FROM rfid_snapshots WHERE session_id = ?',
+            (last_session_id,)
+        ).fetchall()
+        
         return set(row['rfid_tag'] for row in rows)
     
     def calculate_diff(self, current_rfids: List[str], cabinet_id: int, user_id: str) -> Tuple[List[Dict], List[Dict]]:
@@ -170,10 +181,16 @@ class LocalDB:
         current_set = set(current_rfids)
         last_set = self.get_last_snapshot(cabinet_id)
         
+        logger.info(f"Diff calc: current={len(current_set)} tags, last={len(last_set)} tags")
+        logger.debug(f"Current: {current_set}")
+        logger.debug(f"Last: {last_set}")
+        
         # Items that disappeared = borrowed by this user
         borrowed_tags = last_set - current_set
         # Items that appeared = returned by this user  
         returned_tags = current_set - last_set
+        
+        logger.info(f"Borrowed tags: {borrowed_tags}, Returned tags: {returned_tags}")
         
         borrowed = []
         returned = []
@@ -184,6 +201,8 @@ class LocalDB:
                 'SELECT * FROM item_cache WHERE rfid_tag = ?', (tag,)
             ).fetchone()
             if item:
+                # Verify this item was held by this user (or available for first borrow)
+                # For simulation, we assume any missing item is borrowed by current user
                 borrowed.append({
                     'rfid': tag,
                     'item_id': item['item_id'],
@@ -197,6 +216,8 @@ class LocalDB:
                 'SELECT * FROM item_cache WHERE rfid_tag = ?', (tag,)
             ).fetchone()
             if item:
+                # Verify this item was borrowed by this user
+                # For simulation, we assume any new item is returned by current user
                 returned.append({
                     'rfid': tag,
                     'item_id': item['item_id'],
