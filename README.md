@@ -10,19 +10,49 @@ This is the edge device software that runs on Raspberry Pi to control:
 - Servo-controlled drawer locks
 - LED status indicators
 - Local SQLite database for offline operation
+- **Local Dashboard Display** - Real-time user feedback
 
 ## Quick Start
 
 ```bash
-# Install dependencies
+# Install Python dependencies
 pip install -r requirements.txt
+
+# Install Display (Electron) dependencies
+cd display && npm install && cd ..
 
 # Configure
 cp config.example.json config.json
 # Edit config.json with your settings
 
-# Run
-python -m src.main
+# Run (in separate terminals)
+python -m src.main          # Main controller
+npm --prefix display start  # Dashboard display
+```
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                  Raspberry Pi                            │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  │
+│  │  Main App    │  │   Local DB   │  │   Display    │  │
+│  │  (Python)    │  │  (SQLite)    │  │ (Electron)   │  │
+│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  │
+│         │                 │                   │         │
+│         └─────────────────┴───────────────────┘         │
+│                           │                             │
+│              WebSocket (state updates)                  │
+│                           │                             │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  │
+│  │  NFC/QR      │  │    RFID      │  │   Servos     │  │
+│  │  Reader      │  │   Reader     │  │   & LEDs     │  │
+│  └──────────────┘  └──────────────┘  └──────────────┘  │
+└─────────────────────────────────────────────────────────┘
+                              │
+                              │ HTTP/WebSocket
+                              ▼
+                    Save4223 Cloud API
 ```
 
 ## Configuration
@@ -43,6 +73,23 @@ Create `config.json`:
 ```
 LOCKED -> AUTHENTICATING -> UNLOCKED -> SCANNING -> LOCKED
 ```
+
+## Local Dashboard
+
+The Pi runs a local dashboard on its connected monitor (via Electron):
+
+- **IDLE**: Welcome screen with instructions
+- **AUTHENTICATING**: Loading spinner
+- **AUTHENTICATED**: User info with countdown
+- **CHECKOUT**: Item summary (borrowed/returned)
+
+### Why Local?
+
+- **Zero Latency**: Immediate response
+- **Offline Capable**: Works without internet
+- **Better UX**: Smooth 60fps animations
+
+See `display/README.md` for details.
 
 ## Hardware
 

@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Smart Cabinet Display</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- Connection Status Indicator -->
+  <div id="connection-status" class="connection-status">
+    <span class="status-dot"></span>
+    <span class="status-text">Connecting...</span>
+  </div>
+
+  <!-- IDLE State: Welcome Screen -->
+  <div id="state-idle" class="state-container hidden">
+    <div class="welcome-section">
+      <div class="logo">🔧</div>
+      <h1>Smart Cabinet</h1>
+      <p class="subtitle">Tap your card or scan QR code to access</p>
+    </div>
+    
+    <div class="instructions-card">
+      <h2>How to Use</h2>
+      <ol class="steps">
+        <li>
+          <strong>Register</strong>
+          <p>Visit <span class="highlight">save4223.vercel.app</span> to sign up</p>
+        </li>
+        <li>
+          <strong>Pair Your Card</strong>
+          <p>Generate QR code on /account page, scan here, then tap your card</p>
+        </li>
+        <li>
+          <strong>Access Tools</strong>
+          <p>Tap card to unlock, take/return tools, tap again to checkout</p>
+        </li>
+      </ol>
+    </div>
+  </div>
+
+  <!-- AUTHENTICATING State: Loading -->
+  <div id="state-authenticating" class="state-container hidden">
+    <div class="loading-section">
+      <div class="spinner"></div>
+      <h2>Authenticating...</h2>
+      <p>Please wait while we verify your card</p>
+    </div>
+  </div>
+
+  <!-- AUTHENTICATED State: User Session -->
+  <div id="state-authenticated" class="state-container hidden">
+    <div class="user-header">
+      <div class="user-avatar">👤</div>
+      <div class="user-info">
+        <h2 id="user-name">Welcome!</h2>
+        <p id="user-email"></p>
+      </div>
+    </div>
+    
+    <div class="session-card">
+      <h3>📦 Session in Progress</h3>
+      <ol class="session-steps">
+        <li>Take or return items as needed</li>
+        <li class="important">Close all cabinet doors when finished</li>
+        <li class="highlight"><strong>Tap your card once more to complete checkout</strong></li>
+      </ol>
+      
+      <div class="timeout-warning">
+        Auto-logout in <span id="countdown">30</span> seconds
+      </div>
+    </div>
+  </div>
+
+  <!-- CHECKOUT State: Item Summary -->
+  <div id="state-checkout" class="state-container hidden">
+    <div class="checkout-header">
+      <div class="success-icon">✅</div>
+      <h2>Checkout Complete!</h2>
+    </div>
+    
+    <div id="checkout-empty" class="checkout-content hidden">
+      <div class="empty-state">
+        <div class="empty-icon">📭</div>
+        <h3>No Items Changed</h3>
+        <p>No items were borrowed or returned during this session.</p>
+      </div>
+    </div>
+    
+    <div id="checkout-items" class="checkout-content">
+      <div id="borrowed-section" class="item-section hidden">
+        <h3 class="section-title borrowed">📤 Items Borrowed</h3>
+        <ul id="borrowed-list" class="item-list"></ul>
+      </div>
+      
+      <div id="returned-section" class="item-section hidden">
+        <h3 class="section-title returned">📥 Items Returned</h3>
+        <ul id="returned-list" class="item-list"></ul>
+      </div>
+    </div>
+    
+    <div class="checkout-footer">
+      <p id="email-notice">An email summary will be sent to your inbox.</p>
+      <p class="auto-logout">Returning to welcome screen in <span id="checkout-countdown">10</span> seconds...</p>
+    </div>
+  </div>
+
+  <!-- ERROR State -->
+  <div id="state-error" class="state-container hidden">
+    <div class="error-section">
+      <div class="error-icon">❌</div>
+      <h2>Access Denied</h2>
+      <p id="error-message">Your card is not authorized for this cabinet.</p>
+      <div class="error-countdown">Retry in <span id="error-countdown">5</span> seconds</div>
+    </div>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>
