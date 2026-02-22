@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Smart Cabinet - Test Panel</title>
+  <title>Smart Cabinet - Test Panel (Real DB)</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     
@@ -50,6 +50,9 @@
     
     .status-online { background: #86efac; color: #14532d; }
     .status-offline { background: #fca5a5; color: #7f1d1d; }
+    .status-locked { background: #fee2e2; color: #dc2626; }
+    .status-unlocked { background: #dcfce7; color: #16a34a; }
+    .status-scanning { background: #fef3c7; color: #d97706; }
     
     button {
       background: #003974;
@@ -155,17 +158,6 @@
       font-size: 20px;
     }
     
-    .json-view {
-      background: #f5f5f5;
-      padding: 10px;
-      border-radius: 4px;
-      font-family: 'Courier New', monospace;
-      font-size: 11px;
-      overflow-x: auto;
-      max-height: 150px;
-      overflow-y: auto;
-    }
-    
     .tag {
       display: inline-block;
       padding: 2px 8px;
@@ -177,6 +169,7 @@
     .tag-borrowed { background: #fee2e2; color: #dc2626; }
     .tag-returned { background: #dcfce7; color: #16a34a; }
     .tag-pending { background: #fef3c7; color: #d97706; }
+    .tag-available { background: #dbeafe; color: #1d4ed8; }
     
     .refresh-btn {
       float: right;
@@ -184,9 +177,7 @@
       font-size: 12px;
     }
     
-    .section {
-      margin-bottom: 15px;
-    }
+    .section { margin-bottom: 15px; }
     
     .section-title {
       font-weight: 600;
@@ -194,21 +185,53 @@
       margin-bottom: 8px;
       font-size: 13px;
     }
+    
+    .connection-status {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      padding: 10px 20px;
+      background: white;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      z-index: 100;
+    }
+    
+    .loading {
+      display: inline-block;
+      width: 16px;
+      height: 16px;
+      border: 2px solid #f3f3f3;
+      border-top: 2px solid #003974;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin-left: 8px;
+    }
+    
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
   </style>
 </head>
 <body>
-  <h1>🔧 Smart Cabinet - Test Panel</h1>
+  <div class="connection-status">
+    <strong>API Server:</strong>
+    <span id="api-status">Connecting...</span>
+  </div>
+
+  <h1>🔧 Smart Cabinet - Test Panel (Live DB)</h1>
   
-  <!-- Status Row -->
   <div class="grid">
     <div class="panel">
       <h2>System Status <button class="refresh-btn secondary" onclick="refreshAll()">🔄 Refresh</button></h2>
       <div style="margin: 15px 0;">
-        <span class="section-title">Server Connection:</span>
-        <span id="server-status" class="status-badge status-offline">Checking...</span>
-      </div>
-      <div style="margin: 15px 0;">
         <span class="section-title">Current State:</span>
+        <span id="state-badge" class="status-badge status-locked">LOCKED</span>
+      </div>
+      
+      <div style="margin: 15px 0;">
+        <span class="section-title">State Flow:</span>
         <div class="state-diagram">
           <div class="state-node" id="state-locked">LOCKED</div>
           <span class="state-arrow">→</span>
@@ -219,17 +242,20 @@
           <div class="state-node" id="state-scanning">SCANNING</div>
         </div>
       </div>
-      <div id="current-session" style="margin-top: 15px; padding: 10px; background: #F1F7FF; border-radius: 6px;">
-        <strong>Current Session:</strong> <span id="session-id">None</span>
+      
+      <div id="current-session-info" style="margin-top: 15px; padding: 10px; background: #F1F7FF; border-radius: 6px; display: none;">
+        <strong>Session:</strong> <span id="session-id">-</span><br>
+        <strong>User:</strong> <span id="user-name">-</span>
       </div>
     </div>
     
     <div class="panel">
       <h2>Simulate Actions</h2>
+      
       <div class="section">
-        <div class="section-title">1. Authentication</div>
-        <button onclick="simulateAuth('TEST123')">Card: TEST123</button>
-        <button onclick="simulateAuth('CARD456')">Card: CARD456</button>
+        <div class="section-title">1. Card Authentication</div>
+        <button onclick="simulateAuth('TEST123')">TEST123 (Test User)</button>
+        <button onclick="simulateAuth('CARD456')">CARD456 (Vicky)</button>
         <button class="secondary" onclick="simulateAuth('INVALID')">Invalid Card</button>
       </div>
       
@@ -242,8 +268,9 @@
       
       <div class="section">
         <div class="section-title">3. Sync Control</div>
-        <button onclick="triggerSync()">🔄 Force Sync</button>
-        <button class="secondary" onclick="clearPending()">🗑 Clear Queue</button>
+        <button onclick="simulateSync()">🔄 Sync with Server</button>
+        <button class="secondary" onclick="queueSync()">⏳ Queue for Sync</button>
+        <button class="danger" onclick="clearDatabase()">🗑 Clear DB</button>
       </div>
     </div>
   </div>
@@ -251,61 +278,46 @@
   <!-- Database Views -->
   <div class="grid">
     <div class="panel">
-      <h2>Local Database - Session Diffs</h2>
-      <div id="session-diffs">
-        <div class="empty-state">No session diffs recorded</div>
+      <h2>📦 Item Cache (Local DB)</h2>
+      <div id="item-cache">
+        <div class="loading"></div> Loading...
       </div>
     </div>
     
     <div class="panel">
-      <h2>Local Database - Pending Sync</h2>
-      <div id="pending-sync">
-        <div class="empty-state">No pending sync items</div>
+      <h2>📝 Session Diffs (Local DB)</h2>
+      <div id="session-diffs">
+        <div class="loading"></div> Loading...
       </div>
     </div>
   </div>
   
   <div class="grid">
     <div class="panel">
-      <h2>Item Cache (Local State)</h2>
-      <div id="item-cache">
-        <div class="empty-state">No cached items</div>
+      <h2>⏳ Pending Sync Queue (Local DB)</h2>
+      <div id="pending-sync">
+        <div class="loading"></div> Loading...
       </div>
     </div>
     
     <div class="panel">
-      <h2>RFID Snapshots</h2>
+      <h2>📸 RFID Snapshots (Local DB)</h2>
       <div id="rfid-snapshots">
-        <div class="empty-state">No snapshots recorded</div>
+        <div class="loading"></div> Loading...
       </div>
     </div>
   </div>
   
   <!-- Log Panel -->
   <div class="panel" style="grid-column: 1 / -1;">
-    <h2>Event Log <button class="refresh-btn secondary" onclick="clearLogs()">Clear</button></h2>
+    <h2>📋 Event Log <button class="refresh-btn secondary" onclick="clearLogs()">Clear</button></h2>
     <div id="log-container" class="log-container">
       <div class="log-entry"><span class="log-time">[SYSTEM]</span> Test panel initialized</div>
     </div>
   </div>
 
   <script>
-    // Mock data storage
-    const mockDB = {
-      sessionDiffs: [],
-      pendingSync: [],
-      itemCache: [
-        { rfid_tag: 'RFID-OSC-001', item_id: 'item-1', name: 'Oscilloscope #1', status: 'BORROWED', holder_id: '550e8400...' },
-        { rfid_tag: 'RFID-OSC-002', item_id: 'item-2', name: 'Oscilloscope #2', status: 'AVAILABLE', holder_id: null },
-        { rfid_tag: 'RFID-OSC-003', item_id: 'item-3', name: 'Oscilloscope #3', status: 'AVAILABLE', holder_id: null },
-        { rfid_tag: 'RFID-TOOL-001', item_id: 'item-4', name: 'Screwdriver Set', status: 'AVAILABLE', holder_id: null },
-        { rfid_tag: 'RFID-MUL-001', item_id: 'item-5', name: 'Multimeter #1', status: 'BORROWED', holder_id: '550e8400...' },
-        { rfid_tag: 'RFID-MUL-002', item_id: 'item-6', name: 'Multimeter #2', status: 'AVAILABLE', holder_id: null },
-      ],
-      snapshots: [],
-      currentState: 'LOCKED',
-      currentSession: null
-    };
+    const API_BASE = 'http://localhost:8765';
     
     // Logger
     function log(message, type = 'info') {
@@ -322,272 +334,310 @@
       document.getElementById('log-container').innerHTML = '';
     }
     
-    // State management
-    function updateStateDisplay() {
+    // API helpers
+    async function apiGet(path) {
+      const response = await fetch(`${API_BASE}${path}`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return response.json();
+    }
+    
+    async function apiPost(path, data = {}) {
+      const response = await fetch(`${API_BASE}${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return response.json();
+    }
+    
+    // Update UI
+    function updateStateDisplay(state) {
+      const badge = document.getElementById('state-badge');
+      badge.textContent = state.current_state;
+      badge.className = 'status-badge status-' + state.current_state.toLowerCase();
+      
       const states = ['locked', 'auth', 'unlocked', 'scanning'];
       states.forEach(s => {
         const el = document.getElementById(`state-${s}`);
-        el.classList.toggle('active', mockDB.currentState.toLowerCase().includes(s) || 
-          (s === 'auth' && mockDB.currentState === 'AUTHENTICATING'));
+        const isActive = state.current_state.toLowerCase().includes(s) ||
+          (s === 'auth' && state.current_state === 'AUTHENTICATING');
+        el.classList.toggle('active', isActive);
       });
       
-      document.getElementById('session-id').textContent = mockDB.currentSession || 'None';
-    }
-    
-    function setState(state) {
-      mockDB.currentState = state;
-      updateStateDisplay();
-      log(`State changed to: ${state}`, 'info');
-    }
-    
-    // Simulate actions
-    async function simulateAuth(cardId) {
-      log(`Simulating card tap: ${cardId}`, 'info');
-      setState('AUTHENTICATING');
-      
-      await sleep(1000);
-      
-      if (cardId === 'INVALID') {
-        log('Authentication failed: Card not registered', 'error');
-        setState('LOCKED');
-        return;
-      }
-      
-      mockDB.currentSession = 'session-' + Date.now().toString(36);
-      log(`Authentication success! Session: ${mockDB.currentSession}`, 'info');
-      
-      // Auto transition to unlocked
-      simulateUnlock();
-    }
-    
-    function simulateUnlock() {
-      setState('UNLOCKED');
-      log('Cabinet unlocked. User can take/return items.', 'info');
-      
-      // Auto lock after 10 seconds for demo
-      setTimeout(() => {
-        if (mockDB.currentState === 'UNLOCKED') {
-          log('Auto-locking after timeout...', 'warn');
-          simulateScan();
-        }
-      }, 10000);
-    }
-    
-    function simulateLock() {
-      setState('LOCKED');
-      log('Cabinet locked.', 'info');
-    }
-    
-    async function simulateScan() {
-      setState('SCANNING');
-      log('Starting RFID scan...', 'info');
-      
-      await sleep(1500);
-      
-      // Simulate RFID tags detected
-      const detectedTags = ['RFID-OSC-001', 'RFID-OSC-003', 'RFID-MUL-002'];
-      log(`Scan complete. Detected ${detectedTags.length} tags: ${detectedTags.join(', ')}`, 'info');
-      
-      // Calculate diff
-      const borrowed = [
-        { rfid: 'RFID-OSC-002', item_id: 'item-2', name: 'Oscilloscope #2' }
-      ];
-      const returned = [
-        { rfid: 'RFID-MUL-001', item_id: 'item-5', name: 'Multimeter #1' }
-      ];
-      
-      // Save to mock DB
-      const diff = {
-        session_id: mockDB.currentSession,
-        borrowed,
-        returned,
-        created_at: new Date().toISOString(),
-        synced: false
-      };
-      mockDB.sessionDiffs.unshift(diff);
-      
-      // Add to pending sync
-      mockDB.pendingSync.push({
-        id: Date.now(),
-        session_id: mockDB.currentSession,
-        rfids: detectedTags,
-        retry_count: 0,
-        created_at: new Date().toISOString()
-      });
-      
-      log(`Diff calculated: ${borrowed.length} borrowed, ${returned.length} returned`, 'info');
-      
-      // Show to user
-      showItemSummary(borrowed, returned);
-      
-      // Update UI
-      renderSessionDiffs();
-      renderPendingSync();
-      
-      // Try sync
-      await trySync();
-      
-      // Return to locked
-      await sleep(5000);
-      simulateLock();
-    }
-    
-    function showItemSummary(borrowed, returned) {
-      let msg = '📦 Checkout Summary:\n';
-      if (borrowed.length) {
-        msg += `\n📤 Borrowed (${borrowed.length}):\n`;
-        borrowed.forEach(i => msg += `  - ${i.name}\n`);
-      }
-      if (returned.length) {
-        msg += `\n📥 Returned (${returned.length}):\n`;
-        returned.forEach(i => msg += `  - ${i.name}\n`);
-      }
-      log(msg, 'info');
-    }
-    
-    async function trySync() {
-      log('Attempting to sync with server...', 'info');
-      await sleep(1000);
-      
-      const online = Math.random() > 0.3; // 70% chance online
-      
-      if (online) {
-        log('✅ Sync successful!', 'info');
-        // Mark as synced
-        mockDB.sessionDiffs.forEach(d => d.synced = true);
-        mockDB.pendingSync = [];
-        renderSessionDiffs();
-        renderPendingSync();
+      // Session info
+      if (state.current_session) {
+        document.getElementById('current-session-info').style.display = 'block';
+        document.getElementById('session-id').textContent = state.current_session.slice(-8);
+        document.getElementById('user-name').textContent = state.current_user?.user_name || '-';
       } else {
-        log('❌ Sync failed (offline). Queued for retry.', 'error');
+        document.getElementById('current-session-info').style.display = 'none';
       }
-    }
-    
-    async function triggerSync() {
-      log('Manual sync triggered...', 'warn');
-      await trySync();
-    }
-    
-    function clearPending() {
-      mockDB.pendingSync = [];
-      renderPendingSync();
-      log('Pending sync queue cleared', 'warn');
     }
     
     // Render functions
-    function renderSessionDiffs() {
-      const container = document.getElementById('session-diffs');
-      if (!mockDB.sessionDiffs.length) {
-        container.innerHTML = '<div class="empty-state">No session diffs recorded</div>';
-        return;
-      }
-      
-      container.innerHTML = `
-        <table class="data-table">
-          <tr>
-            <th>Session</th>
-            <th>Borrowed</th>
-            <th>Returned</th>
-            <th>Status</th>
-          </tr>
-          ${mockDB.sessionDiffs.map(d => `
-            <tr>
-              <td>${d.session_id.slice(-8)}</td>
-              <td>${d.borrowed.map(i => `<span class="tag tag-borrowed">${i.name}</span>`).join('')}</td>
-              <td>${d.returned.map(i => `<span class="tag tag-returned">${i.name}</span>`).join('')}</td>
-              <td>${d.synced ? '✅ Synced' : '<span class="tag tag-pending">Pending</span>'}</td>
-            </tr>
-          `).join('')}
-        </table>
-      `;
-    }
-    
-    function renderPendingSync() {
-      const container = document.getElementById('pending-sync');
-      if (!mockDB.pendingSync.length) {
-        container.innerHTML = '<div class="empty-state">No pending sync items</div>';
-        return;
-      }
-      
-      container.innerHTML = `
-        <table class="data-table">
-          <tr>
-            <th>Session</th>
-            <th>Tags</th>
-            <th>Retries</th>
-            <th>Created</th>
-          </tr>
-          ${mockDB.pendingSync.map(p => `
-            <tr>
-              <td>${p.session_id.slice(-8)}</td>
-              <td>${p.rfids.length} tags</td>
-              <td>${p.retry_count}</td>
-              <td>${new Date(p.created_at).toLocaleTimeString()}</td>
-            </tr>
-          `).join('')}
-        </table>
-      `;
-    }
-    
-    function renderItemCache() {
-      const container = document.getElementById('item-cache');
-      container.innerHTML = `
-        <table class="data-table">
-          <tr>
-            <th>RFID</th>
-            <th>Name</th>
-            <th>Status</th>
-            <th>Holder</th>
-          </tr>
-          ${mockDB.itemCache.map(item => `
-            <tr>
-              <td>${item.rfid_tag}</td>
-              <td>${item.name}</td>
-              <td><span class="tag ${item.status === 'AVAILABLE' ? 'tag-returned' : 'tag-borrowed'}">${item.status}</span></td>
-              <td>${item.holder_id ? item.holder_id.slice(-8) + '...' : '-'}</td>
-            </tr>
-          `).join('')}
-        </table>
-      `;
-    }
-    
-    // Utils
-    function sleep(ms) {
-      return new Promise(resolve => setTimeout(resolve, ms));
-    }
-    
-    function refreshAll() {
-      renderSessionDiffs();
-      renderPendingSync();
-      renderItemCache();
-      updateStateDisplay();
-      log('Data refreshed', 'info');
-    }
-    
-    // Check server status periodically
-    async function checkServerStatus() {
+    async function renderItemCache() {
       try {
-        const response = await fetch('http://localhost:3001/api/health', { 
-          method: 'GET',
-          headers: { 'Authorization': 'Bearer edge_device_secret_key' }
-        });
-        const online = response.ok;
-        const badge = document.getElementById('server-status');
-        badge.textContent = online ? 'Online' : 'Offline';
-        badge.className = 'status-badge ' + (online ? 'status-online' : 'status-offline');
+        const items = await apiGet('/api/db/item-cache');
+        const container = document.getElementById('item-cache');
+        
+        if (!items.length) {
+          container.innerHTML = '<div class="empty-state">No items in cache</div>';
+          return;
+        }
+        
+        container.innerHTML = `
+          <table class="data-table">
+            <tr>
+              <th>RFID</th>
+              <th>Name</th>
+              <th>Status</th>
+              <th>Holder</th>
+            </tr>
+            ${items.map(item => `
+              <tr>
+                <td>${item.rfid_tag}</td>
+                <td>${item.name}</td>
+                <td><span class="tag tag-${item.status.toLowerCase()}">${item.status}</span></td>
+                <td>${item.holder_id ? item.holder_id.slice(-8) + '...' : '-'}</td>
+              </tr>
+            `).join('')}
+          </table>
+        `;
       } catch (e) {
-        const badge = document.getElementById('server-status');
-        badge.textContent = 'Offline (Mock Mode)';
-        badge.className = 'status-badge status-offline';
+        document.getElementById('item-cache').innerHTML = `<div class="empty-state">Error: ${e.message}</div>`;
+      }
+    }
+    
+    async function renderSessionDiffs() {
+      try {
+        const diffs = await apiGet('/api/db/session-diffs');
+        const container = document.getElementById('session-diffs');
+        
+        if (!diffs.length) {
+          container.innerHTML = '<div class="empty-state">No session diffs</div>';
+          return;
+        }
+        
+        container.innerHTML = `
+          <table class="data-table">
+            <tr>
+              <th>Session</th>
+              <th>Borrowed</th>
+              <th>Returned</th>
+              <th>Status</th>
+            </tr>
+            ${diffs.map(d => `
+              <tr>
+                <td>${d.session_id.slice(-8)}</td>
+                <td>${d.borrowed.map(i => `<span class="tag tag-borrowed">${i.name}</span>`).join('') || '-'}</td>
+                <td>${d.returned.map(i => `<span class="tag tag-returned">${i.name}</span>`).join('') || '-'}</td>
+                <td>${d.synced ? '✅' : '<span class="tag tag-pending">Pending</span>'}</td>
+              </tr>
+            `).join('')}
+          </table>
+        `;
+      } catch (e) {
+        document.getElementById('session-diffs').innerHTML = `<div class="empty-state">Error: ${e.message}</div>`;
+      }
+    }
+    
+    async function renderPendingSync() {
+      try {
+        const pending = await apiGet('/api/db/pending-sync');
+        const container = document.getElementById('pending-sync');
+        
+        if (!pending.length) {
+          container.innerHTML = '<div class="empty-state">No pending sync</div>';
+          return;
+        }
+        
+        container.innerHTML = `
+          <table class="data-table">
+            <tr>
+              <th>Session</th>
+              <th>Tags</th>
+              <th>Retries</th>
+              <th>Created</th>
+            </tr>
+            ${pending.map(p => `
+              <tr>
+                <td>${p.session_id.slice(-8)}</td>
+                <td>${p.rfids.length} tags</td>
+                <td>${p.retry_count}</td>
+                <td>${new Date(p.created_at).toLocaleTimeString()}</td>
+              </tr>
+            `).join('')}
+          </table>
+        `;
+      } catch (e) {
+        document.getElementById('pending-sync').innerHTML = `<div class="empty-state">Error: ${e.message}</div>`;
+      }
+    }
+    
+    async function renderSnapshots() {
+      try {
+        const snapshots = await apiGet('/api/db/snapshots');
+        const container = document.getElementById('rfid-snapshots');
+        
+        if (!snapshots.length) {
+          container.innerHTML = '<div class="empty-state">No snapshots</div>';
+          return;
+        }
+        
+        container.innerHTML = `
+          <table class="data-table">
+            <tr>
+              <th>Session</th>
+              <th>Tag Count</th>
+              <th>Captured</th>
+            </tr>
+            ${snapshots.map(s => `
+              <tr>
+                <td>${s.session_id.slice(-8)}</td>
+                <td>${s.tag_count}</td>
+                <td>${new Date(s.captured_at).toLocaleTimeString()}</td>
+              </tr>
+            `).join('')}
+          </table>
+        `;
+      } catch (e) {
+        document.getElementById('rfid-snapshots').innerHTML = `<div class="empty-state">Error: ${e.message}</div>`;
+      }
+    }
+    
+    // Simulate actions
+    async function simulateAuth(cardUid) {
+      try {
+        log(`Authenticating card: ${cardUid}...`);
+        const result = await apiPost('/api/simulate/auth', { card_uid: cardUid });
+        
+        if (result.authorized) {
+          log(`✅ Auth success: ${result.user.user_name}`, 'info');
+          updateStateDisplay({ current_state: 'AUTHENTICATING', current_session: result.session_id, current_user: result.user });
+          setTimeout(() => simulateUnlock(), 500);
+        } else {
+          log(`❌ Auth failed: ${result.reason}`, 'error');
+        }
+      } catch (e) {
+        log(`❌ Error: ${e.message}`, 'error');
+      }
+      await refreshAll();
+    }
+    
+    async function simulateUnlock() {
+      try {
+        await apiPost('/api/simulate/unlock');
+        log('🔓 Cabinet unlocked', 'info');
+        updateStateDisplay({ current_state: 'UNLOCKED', current_session: (await apiGet('/api/state')).current_session, current_user: (await apiGet('/api/state')).current_user });
+      } catch (e) {
+        log(`❌ Error: ${e.message}`, 'error');
+      }
+      await refreshAll();
+    }
+    
+    async function simulateLock() {
+      try {
+        await apiPost('/api/simulate/lock');
+        log('🔒 Cabinet locked', 'info');
+        updateStateDisplay({ current_state: 'LOCKED', current_session: null, current_user: null });
+      } catch (e) {
+        log(`❌ Error: ${e.message}`, 'error');
+      }
+      await refreshAll();
+    }
+    
+    async function simulateScan() {
+      try {
+        log('📡 Starting RFID scan...');
+        const result = await apiPost('/api/simulate/scan');
+        
+        log(`📡 Scan complete: ${result.borrowed.length} borrowed, ${result.returned.length} returned`, 'info');
+        
+        if (result.borrowed.length) {
+          log(`📤 Borrowed: ${result.borrowed.map(i => i.name).join(', ')}`);
+        }
+        if (result.returned.length) {
+          log(`📥 Returned: ${result.returned.map(i => i.name).join(', ')}`);
+        }
+        
+        updateStateDisplay({ current_state: 'SCANNING', current_session: result.session_id, current_user: (await apiGet('/api/state')).current_user });
+      } catch (e) {
+        log(`❌ Error: ${e.message}`, 'error');
+      }
+      await refreshAll();
+    }
+    
+    async function simulateSync() {
+      try {
+        log('🔄 Syncing with server...');
+        await apiPost('/api/simulate/sync');
+        log('✅ Sync complete', 'info');
+      } catch (e) {
+        log(`❌ Sync failed: ${e.message}`, 'error');
+      }
+      await refreshAll();
+    }
+    
+    async function queueSync() {
+      try {
+        log('⏳ Queueing for sync...');
+        await apiPost('/api/simulate/queue-sync');
+        log('✅ Queued', 'info');
+      } catch (e) {
+        log(`❌ Error: ${e.message}`, 'error');
+      }
+      await refreshAll();
+    }
+    
+    async function clearDatabase() {
+      if (!confirm('Clear all test data?')) return;
+      try {
+        log('🗑 Clearing database...');
+        await apiPost('/api/db/clear');
+        log('✅ Database cleared', 'info');
+        updateStateDisplay({ current_state: 'LOCKED', current_session: null, current_user: null });
+      } catch (e) {
+        log(`❌ Error: ${e.message}`, 'error');
+      }
+      await refreshAll();
+    }
+    
+    // Refresh all data
+    async function refreshAll() {
+      try {
+        const state = await apiGet('/api/state');
+        updateStateDisplay(state);
+      } catch (e) {
+        log(`Failed to get state: ${e.message}`, 'error');
+      }
+      
+      await Promise.all([
+        renderItemCache(),
+        renderSessionDiffs(),
+        renderPendingSync(),
+        renderSnapshots()
+      ]);
+    }
+    
+    // Check API server status
+    async function checkApiStatus() {
+      try {
+        await apiGet('/api/state');
+        document.getElementById('api-status').innerHTML = '<span class="status-badge status-online">Connected</span>';
+        return true;
+      } catch (e) {
+        document.getElementById('api-status').innerHTML = '<span class="status-badge status-offline">Disconnected</span> (Run: python tests/test_api_server.py)';
+        return false;
       }
     }
     
     // Init
-    setInterval(checkServerStatus, 5000);
-    checkServerStatus();
-    renderItemCache();
-    updateStateDisplay();
-    log('Test panel ready. Click buttons to simulate actions.', 'info');
+    setInterval(checkApiStatus, 3000);
+    setInterval(refreshAll, 2000);
+    checkApiStatus();
+    refreshAll();
+    log('Test panel ready. Start the API server and click buttons.', 'info');
   </script>
 </body>
 </html>
