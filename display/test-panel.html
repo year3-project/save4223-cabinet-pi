@@ -278,7 +278,26 @@
       </div>
       
       <div class="section">
-        <div class="section-title">4. Sync Control</div>
+        <div class="section-title">4. Card Pairing (Link NFC to User)</div>
+        <input 
+          type="text" 
+          id="pairing-token" 
+          placeholder="Enter pairing token from /user/pair-card"
+          style="width: 100%; padding: 8px; margin-bottom: 10px; border-radius: 4px; border: 1px solid #ddd;"
+        >
+        <input 
+          type="text" 
+          id="pairing-card-uid" 
+          placeholder="Card UID to pair (e.g., NEWCARD001)"
+          style="width: 100%; padding: 8px; margin-bottom: 10px; border-radius: 4px; border: 1px solid #ddd;"
+        >
+        <button class="success" onclick="simulatePairing()" style="width: 100%;">
+          💳 Pair Card
+        </button>
+      </div>
+      
+      <div class="section">
+        <div class="section-title">5. Sync Control</div>
         <button onclick="simulateSync()">🔄 Sync with Server</button>
         <button class="secondary" onclick="queueSync()">⏳ Queue for Sync</button>
         <button class="danger" onclick="clearDatabase()">🗑 Clear DB</button>
@@ -624,6 +643,40 @@
         log(`❌ Error: ${e.message}`, 'error');
       }
       await refreshAll();
+    }
+    
+    async function simulatePairing() {
+      try {
+        const token = document.getElementById('pairing-token').value.trim();
+        const cardUid = document.getElementById('pairing-card-uid').value.trim();
+        
+        if (!token) {
+          log('❌ Please enter a pairing token', 'error');
+          return;
+        }
+        if (!cardUid) {
+          log('❌ Please enter a card UID to pair', 'error');
+          return;
+        }
+        
+        log(`💳 Pairing card ${cardUid} with token...`);
+        
+        const result = await apiPost('/api/simulate/pair-card', {
+          pairing_token: token,
+          card_uid: cardUid,
+          cabinet_id: 1
+        });
+        
+        if (result.success) {
+          log(`✅ ${result.message}`, 'info');
+          log(`   User ID: ${result.user_id.slice(-8)}...`);
+          log(`   Card UID: ${result.card_uid}`);
+        } else {
+          log(`❌ Pairing failed: ${result.error || 'Unknown error'}`, 'error');
+        }
+      } catch (e) {
+        log(`❌ Pairing error: ${e.message}`, 'error');
+      }
     }
     
     async function simulateSync() {

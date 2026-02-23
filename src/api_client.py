@@ -102,3 +102,19 @@ class APIClient:
             return True
         except APIError:
             return False
+    
+    def pair_card(self, pairing_token: str, card_uid: str, cabinet_id: int) -> Dict[str, Any]:
+        """
+        Pair an NFC card with a user using a pairing token.
+        
+        POST /api/edge/pair-card
+        """
+        logger.debug(f"Pairing card: {card_uid[:10]}... with token")
+        
+        result = self._request('POST', '/api/edge/pair-card', json={
+            'pairing_token': pairing_token,
+            'card_uid': card_uid,
+            'cabinet_id': cabinet_id,
+        })
+        
+        return result

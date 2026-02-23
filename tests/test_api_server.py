@@ -326,6 +326,27 @@ class TestAPIHandler(BaseHTTPRequestHandler):
                 "session_id": session_id
             }).encode())
         
+        elif self.path == '/api/simulate/pair-card':
+            # Simulate card pairing
+            pairing_token = body.get('pairing_token')
+            card_uid = body.get('card_uid')
+            
+            if not pairing_token or not card_uid:
+                self._set_headers(400)
+                self.wfile.write(json.dumps({"error": "Missing pairing_token or card_uid"}).encode())
+                return
+            
+            # Mock successful pairing
+            self._set_headers()
+            response = {
+                "success": True,
+                "message": f"Card {card_uid} successfully linked to account",
+                "user_id": "550e8400-e29b-41d4-a716-446655440000",
+                "card_uid": card_uid,
+            }
+            self.wfile.write(json.dumps(response).encode())
+            logger.info(f"💳 Card paired: {card_uid}")
+        
         elif self.path == '/api/db/clear':
             # Clear all test data
             db._conn.execute('DELETE FROM session_diffs')
