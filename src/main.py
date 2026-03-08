@@ -7,6 +7,7 @@ Raspberry Pi controller for Save4223 smart tool cabinet system.
 import time
 import signal
 import sys
+import os
 import logging
 import uuid
 import json
@@ -33,12 +34,14 @@ else:
     from hardware import RaspberryPiHardware as HardwareController
 
 # Configure logging
+log_path = Path('/var/log/cabinet.log') if Path('/var/log').exists() and os.access('/var/log', os.W_OK) else Path(__file__).parent.parent / 'data' / 'cabinet.log'
+log_path.parent.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler('/var/log/cabinet.log')
+        logging.FileHandler(log_path)
     ]
 )
 logger = logging.getLogger(__name__)

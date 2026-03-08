@@ -3,7 +3,7 @@
 import threading
 import time
 import logging
-from typing import Optional
+from typing import Optional, Dict, Any
 
 logger = logging.getLogger(__name__)
 
