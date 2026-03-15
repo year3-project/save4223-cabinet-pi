@@ -33,6 +33,12 @@ def test_nfc_reader(hw):
     print("="*50)
 
     # Check which reader is available
+    print(f"Debug: _hid_reader = {hw._hid_reader}")
+    print(f"Debug: _nfc_reader = {hw._nfc_reader}")
+
+    if hw._hid_reader:
+        print(f"Debug: HID available = {hw._hid_reader.is_available()}")
+
     if hw._hid_reader and hw._hid_reader.is_available():
         print("Using HID keyboard reader (NXP device)")
     elif hw._nfc_reader and hw._nfc_reader.is_connected():
@@ -43,12 +49,18 @@ def test_nfc_reader(hw):
 
     print("Please tap a card or scan a QR code...")
 
-    uid = hw.read_nfc(timeout=10)
-    if uid:
-        print(f"✓ NFC card read: {uid}")
-        return True
-    else:
-        print("✗ No card detected (timeout)")
+    try:
+        uid = hw.read_nfc(timeout=10)
+        if uid:
+            print(f"✓ NFC card read: {uid}")
+            return True
+        else:
+            print("✗ No card detected (timeout)")
+            return False
+    except Exception as e:
+        print(f"✗ Error reading NFC: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 
