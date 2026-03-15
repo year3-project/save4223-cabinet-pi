@@ -1,0 +1,29 @@
+{
+  "_comment": "Cloud configuration - Pi connects to Vercel + Supabase Cloud",
+  "server_url": "https://save4223.vercel.app",
+  "edge_secret": "your-edge-api-secret-key",
+  "cabinet_id": 1,
+  "db_path": "./data/local.db",
+  "session_timeout": 300,
+  "rfid_scan_count": 10,
+  "sync_interval": 60,
+  "num_drawers": 4,
+  "ssl": {
+    "verify": true,
+    "cert_path": null
+  },
+  "api": {
+    "timeout": 10,
+    "max_retries": 3,
+    "retry_delay": 2.0
+  },
+  "display": {
+    "enabled": true,
+    "fullscreen": true,
+    "width": 800,
+    "height": 480
+  },
+  "hardware": {
+    "mode": "mock"
+  }
+}

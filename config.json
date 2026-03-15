@@ -1,21 +1,27 @@
 {
-  "server_url": "https://save4223.local:8443",
-  "edge_secret": "edge_device_secret_key",
-  "cabinet_id": 1,
-  "db_path": "./data/local.db",
-  "session_timeout": 60,
-  "rfid_scan_count": 5,
-  "sync_interval": 60,
-  "num_drawers": 4,
-  "hardware": {
-    "mode": "mock"
-  },
-  "ssl": {
-    "verify": false
-  },
-  "api": {
-    "timeout": 5,
-    "max_retries": 2,
-    "retry_delay": 1.0
-  }
+    "server_url": "https://lovelace.tail20b481.ts.net:3001",
+    "edge_secret": "edge_device_secret_key",
+    "cabinet_id": 7,
+    "db_path": "./data/local.db",
+    "session_timeout": 60,
+    "rfid_scan_count": 5,
+    "sync_interval": 60,
+    "num_drawers": 4,
+    "hardware": {
+        "mode": "mock"
+    },
+    "ssl": {
+        "verify": false
+    },
+    "api": {
+        "timeout": 5,
+        "max_retries": 2,
+        "retry_delay": 1.0
+    },
+    "display": {
+        "enabled": true,
+        "fullscreen": true,
+        "width": 800,
+        "height": 480
+    }
 }

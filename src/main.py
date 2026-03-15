@@ -33,6 +33,15 @@ if HARDWARE_MODE == 'mock':
 else:
     from hardware import RaspberryPiHardware as HardwareController
 
+# Display import (optional - falls back to console if nicegui not available)
+try:
+    sys.path.insert(0, str(Path(__file__).parent.parent / 'display'))
+    from display_gui import DisplayThread
+    DISPLAY_AVAILABLE = True
+except ImportError as e:
+    DISPLAY_AVAILABLE = False
+    logging.warning(f"Display not available: {e}")
+
 # Configure logging
 log_path = Path('/var/log/cabinet.log') if Path('/var/log').exists() and os.access('/var/log', os.W_OK) else Path(__file__).parent.parent / 'data' / 'cabinet.log'
 log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -93,6 +102,21 @@ class SmartCabinet:
         self.pairing_handler = PairingHandler(self.api, self.local_db)
         self.inventory = InventoryManager(self.local_db)
 
+        # Initialize display (optional)
+        self.display = None
+        if DISPLAY_AVAILABLE and CONFIG.get('display', {}).get('enabled', True):
+            try:
+                display_config = CONFIG.get('display', {})
+                self.display = DisplayThread(
+                    width=display_config.get('width', 800),
+                    height=display_config.get('height', 480),
+                    fullscreen=display_config.get('fullscreen', True)
+                )
+                self.display.start()
+                logger.info("Display started")
+            except Exception as e:
+                logger.warning(f"Failed to start display: {e}")
+
         # Setup handlers
         self._setup_signal_handlers()
         self._setup_state_handlers()
@@ -137,7 +161,13 @@ class SmartCabinet:
     def _send_to_display(self, message: dict):
         """Send update to local dashboard."""
         logger.info(f"[DISPLAY] {message['type']}: {json.dumps(message, default=str)}")
-        # TODO: Implement WebSocket to Electron display
+
+        # Send to pygame display if available
+        if self.display:
+            try:
+                self.display.send_message(message)
+            except Exception as e:
+                logger.debug(f"Display update failed: {e}")
 
     # =================================================================================
     # State Handlers
@@ -653,6 +683,12 @@ class SmartCabinet:
         logger.info("Cleaning up...")
         self.running = False
         self.sync_worker.stop()
+        if self.display:
+            try:
+                self.display.stop()
+                self.display.join(timeout=2)
+            except Exception as e:
+                logger.debug(f"Display cleanup error: {e}")
         self.local_db.close()
         self.hardware.cleanup()
         logger.info("Cleanup complete")

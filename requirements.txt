@@ -1,5 +1,6 @@
 # Core dependencies
 requests>=2.31.0
+nicegui>=1.4.0
 
 # Raspberry Pi GPIO
 RPi.GPIO>=0.7.1

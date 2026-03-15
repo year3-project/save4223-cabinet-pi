@@ -15,19 +15,18 @@ This is the edge device software that runs on Raspberry Pi to control:
 ## Quick Start
 
 ```bash
-# Install Python dependencies
-pip install -r requirements.txt
+# Install uv (if not already installed)
+curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Install Display (Electron) dependencies
-cd display && npm install && cd ..
+# Install Python dependencies
+uv sync
 
 # Configure
 cp config.example.json config.json
 # Edit config.json with your settings
 
-# Run (in separate terminals)
-python -m src.main          # Main controller
-npm --prefix display start  # Dashboard display
+# Run
+uv run python -m src.main   # Main controller (display auto-starts)
 ```
 
 ## Architecture
@@ -37,7 +36,7 @@ npm --prefix display start  # Dashboard display
 │                  Raspberry Pi                            │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  │
 │  │  Main App    │  │   Local DB   │  │   Display    │  │
-│  │  (Python)    │  │  (SQLite)    │  │ (Electron)   │  │
+│  │  (Python)    │  │  (SQLite)    │  │  (NiceGUI)   │  │
 │  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  │
 │         │                 │                   │         │
 │         └─────────────────┴───────────────────┘         │
@@ -50,7 +49,7 @@ npm --prefix display start  # Dashboard display
 │  └──────────────┘  └──────────────┘  └──────────────┘  │
 └─────────────────────────────────────────────────────────┘
                               │
-                              │ HTTP/WebSocket
+                              │ HTTPS/REST
                               ▼
                     Save4223 Cloud API
 ```
@@ -76,18 +75,20 @@ LOCKED -> AUTHENTICATING -> UNLOCKED -> SCANNING -> LOCKED
 
 ## Local Dashboard
 
-The Pi runs a local dashboard on its connected monitor (via Electron):
+The Pi runs a local dashboard using NiceGUI (pure Python, no npm):
 
-- **IDLE**: Welcome screen with instructions
-- **AUTHENTICATING**: Loading spinner
-- **AUTHENTICATED**: User info with countdown
-- **CHECKOUT**: Item summary (borrowed/returned)
+- **LOCKED**: Red screen, tap card to unlock
+- **AUTHENTICATING**: Yellow spinner
+- **UNLOCKED**: Green screen with user info
+- **SCANNING**: Yellow spinner, checking inventory
+- **SUMMARY**: Shows borrowed/returned items
 
-### Why Local?
+### Why NiceGUI?
 
-- **Zero Latency**: Immediate response
+- **Zero Latency**: Immediate WebSocket updates
 - **Offline Capable**: Works without internet
-- **Better UX**: Smooth 60fps animations
+- **No npm**: Pure Python, no Node.js dependencies
+- **Auto Kiosk**: Auto-launches Chromium in fullscreen
 
 See `display/README.md` for details.
 

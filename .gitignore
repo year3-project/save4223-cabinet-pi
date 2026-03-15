@@ -6,3 +6,8 @@ dist/
 build/
 data/
 *.db
+
+# uv
+.venv/
+uv.lock
+.python-version

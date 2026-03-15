@@ -71,39 +71,71 @@ class MockHardware(HardwareInterface):
 
         Prompts user to enter a card UID or select from predefined cards.
         """
-        print("\n[MOCK NFC] Waiting for card scan...")
+        print("\n" + "=" * 50)
+        print("[MOCK NFC] Waiting for card scan...")
+        print("=" * 50)
         print("Options:")
         print("  1. Enter card UID manually")
         print("  2. Use test card: 'CARD-001'")
         print("  3. Use test card: 'CARD-002'")
         print("  4. Press Enter to simulate timeout")
         print(f"[Timeout: {timeout}s]")
+        print("=" * 50)
 
-        # Use select for timeout on stdin
-        if sys.stdin in select.select([sys.stdin], [], [], timeout)[0]:
-            choice = sys.stdin.readline().strip()
+        # Check for mock trigger file (allows testing without blocking)
+        trigger_file = Path("/tmp/mock_nfc_trigger.txt")
+        if trigger_file.exists():
+            card_uid = trigger_file.read_text().strip()
+            trigger_file.unlink()
+            print(f"[MOCK NFC] Card from trigger file: {card_uid}")
+            self.beep_success()
+            return card_uid
 
-            if choice == "1":
-                print("Enter card UID:")
-                uid = sys.stdin.readline().strip()
+        # Simple input with timeout using threading
+        result = [None]
+        input_received = threading.Event()
+
+        def get_input():
+            try:
+                result[0] = input("\nSelect option (1-4): ").strip()
+                input_received.set()
+            except EOFError:
+                input_received.set()
+
+        # Start input thread
+        input_thread = threading.Thread(target=get_input, daemon=True)
+        input_thread.start()
+
+        # Wait with timeout
+        input_received.wait(timeout=timeout)
+
+        if result[0] is None:
+            print("[MOCK NFC] Timeout (no input)")
+            return None
+
+        choice = result[0]
+
+        if choice == "1":
+            print("Enter card UID:")
+            try:
+                uid = input().strip()
                 if uid:
                     print(f"[MOCK NFC] Card scanned: {uid}")
                     self.beep_success()
                     return uid
-            elif choice == "2":
-                print("[MOCK NFC] Test card scanned: CARD-001")
-                self.beep_success()
-                return "CARD-001"
-            elif choice == "3":
-                print("[MOCK NFC] Test card scanned: CARD-002")
-                self.beep_success()
-                return "CARD-002"
-            else:
-                print("[MOCK NFC] Timeout (Enter pressed)")
-                return None
-        else:
-            print("[MOCK NFC] Timeout (no input)")
-            return None
+            except EOFError:
+                pass
+        elif choice == "2":
+            print("[MOCK NFC] Test card scanned: CARD-001")
+            self.beep_success()
+            return "CARD-001"
+        elif choice == "3":
+            print("[MOCK NFC] Test card scanned: CARD-002")
+            self.beep_success()
+            return "CARD-002"
+
+        print("[MOCK NFC] Timeout / No card")
+        return None
 
     def read_qr(self, timeout: float = 30.0) -> Optional[str]:
         """Read QR code from console input."""

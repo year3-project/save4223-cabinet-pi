@@ -1,121 +1,294 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Smart Cabinet Display</title>
-  <link rel="stylesheet" href="styles.css">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Cabinet Display</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', sans-serif;
+            background: #0a0a0a;
+            color: #fff;
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        .header {
+            background: linear-gradient(90deg, #1a1a2e 0%, #16213e 100%);
+            padding: 20px 40px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 2px solid #0f3460;
+        }
+        .logo { display: flex; align-items: center; gap: 15px; }
+        .logo-icon {
+            width: 50px; height: 50px;
+            background: #e94560;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 28px;
+        }
+        .logo-text h1 { font-size: 28px; font-weight: 700; color: #fff; letter-spacing: 1px; }
+        .logo-text p { font-size: 14px; color: #8892b0; }
+        .status-bar { display: flex; align-items: center; gap: 30px; }
+        .status-item { display: flex; align-items: center; gap: 10px; font-size: 16px; color: #8892b0; }
+        .status-indicator {
+            width: 12px; height: 12px;
+            border-radius: 50%;
+            background: #e94560;
+            animation: pulse 2s infinite;
+        }
+        .status-indicator.online { background: #00d9ff; box-shadow: 0 0 10px #00d9ff; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        .clock { font-size: 24px; font-weight: 600; color: #fff; font-variant-numeric: tabular-nums; }
+        .main { flex: 1; display: flex; padding: 40px; gap: 40px; }
+        .main-display { flex: 2; display: flex; flex-direction: column; gap: 30px; }
+        .state-card {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            border-radius: 20px;
+            padding: 40px;
+            border: 2px solid #0f3460;
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            transition: all 0.5s ease;
+        }
+        .state-card.locked { border-color: #e94560; box-shadow: 0 0 30px rgba(233, 69, 96, 0.3); }
+        .state-card.unlocked { border-color: #00d9ff; box-shadow: 0 0 30px rgba(0, 217, 255, 0.3); }
+        .state-card.processing { border-color: #ffd700; box-shadow: 0 0 30px rgba(255, 215, 0, 0.3); }
+        .state-icon { font-size: 120px; margin-bottom: 30px; }
+        .state-title { font-size: 48px; font-weight: 700; margin-bottom: 15px; }
+        .state-message { font-size: 24px; color: #8892b0; max-width: 600px; }
+        .user-info {
+            margin-top: 30px;
+            padding: 20px 40px;
+            background: rgba(0, 217, 255, 0.1);
+            border-radius: 15px;
+            border: 1px solid #00d9ff;
+        }
+        .user-name { font-size: 36px; font-weight: 700; color: #00d9ff; }
+        .user-email { font-size: 18px; color: #8892b0; margin-top: 5px; }
+        .side-panel { flex: 1; display: flex; flex-direction: column; gap: 20px; }
+        .panel-card { background: #1a1a2e; border-radius: 15px; padding: 25px; border: 1px solid #0f3460; }
+        .panel-card h3 { font-size: 18px; color: #8892b0; margin-bottom: 15px; text-transform: uppercase; letter-spacing: 1px; }
+        .led-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-top: 10px; }
+        .led-item {
+            aspect-ratio: 1;
+            border-radius: 12px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+        .led-item.locked { background: #2d1b1b; color: #e94560; border: 2px solid #e94560; }
+        .led-item.unlocked { background: #1b2d2d; color: #00d9ff; border: 2px solid #00d9ff; box-shadow: 0 0 15px rgba(0, 217, 255, 0.5); }
+        .led-number { font-size: 24px; margin-bottom: 5px; }
+        .transaction-list { max-height: 200px; overflow-y: auto; }
+        .transaction-item { display: flex; align-items: center; padding: 12px; margin-bottom: 10px; border-radius: 10px; font-size: 16px; }
+        .transaction-item.borrow { background: rgba(233, 69, 96, 0.1); border-left: 4px solid #e94560; }
+        .transaction-item.return { background: rgba(0, 217, 255, 0.1); border-left: 4px solid #00d9ff; }
+        .transaction-icon { font-size: 24px; margin-right: 15px; }
+        .transaction-name { flex: 1; font-weight: 500; }
+        .transaction-tag { font-size: 12px; color: #8892b0; font-family: monospace; }
+        .empty-state { text-align: center; padding: 40px; color: #4a5568; }
+        .empty-state-icon { font-size: 48px; margin-bottom: 15px; }
+        @keyframes slideIn { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+        .animate-in { animation: slideIn 0.5s ease; }
+    </style>
 </head>
 <body>
-  <!-- Connection Status Indicator -->
-  <div id="connection-status" class="connection-status">
-    <span class="status-dot"></span>
-    <span class="status-text">Connecting...</span>
-  </div>
+    <header class="header">
+        <div class="logo">
+            <div class="logo-icon">🔧</div>
+            <div class="logo-text">
+                <h1>Smart Cabinet</h1>
+                <p>智能工具管理柜</p>
+            </div>
+        </div>
+        <div class="status-bar">
+            <div class="status-item">
+                <div class="status-indicator online" id="serverStatus"></div>
+                <span>Server Online</span>
+            </div>
+            <div class="status-item">
+                <div class="status-indicator online" id="syncStatus"></div>
+                <span>Sync Active</span>
+            </div>
+            <div class="clock" id="clock">00:00:00</div>
+        </div>
+    </header>
 
-  <!-- IDLE State: Welcome Screen -->
-  <div id="state-idle" class="state-container hidden">
-    <div class="welcome-section">
-      <div class="logo">🔧</div>
-      <h1>Smart Cabinet</h1>
-      <p class="subtitle">Tap your card or scan QR code to access</p>
-    </div>
-    
-    <div class="instructions-card">
-      <h2>How to Use</h2>
-      <ol class="steps">
-        <li>
-          <strong>Register</strong>
-          <p>Visit <span class="highlight">save4223.vercel.app</span> to sign up</p>
-        </li>
-        <li>
-          <strong>Pair Your Card</strong>
-          <p>Generate QR code on /account page, scan here, then tap your card</p>
-        </li>
-        <li>
-          <strong>Access Tools</strong>
-          <p>Tap card to unlock, take/return tools, tap again to checkout</p>
-        </li>
-      </ol>
-    </div>
-  </div>
+    <main class="main">
+        <div class="main-display">
+            <div class="state-card locked" id="stateCard">
+                <div class="state-icon" id="stateIcon">🔒</div>
+                <div class="state-title" id="stateTitle">系统已锁定</div>
+                <div class="state-message" id="stateMessage">
+                    请将 NFC 卡靠近读卡器，或扫描屏幕上的二维码
+                </div>
+                <div class="user-info" id="userInfo" style="display: none;">
+                    <div class="user-name" id="userName">--</div>
+                    <div class="user-email" id="userEmail">--</div>
+                </div>
+            </div>
+        </div>
 
-  <!-- AUTHENTICATING State: Loading -->
-  <div id="state-authenticating" class="state-container hidden">
-    <div class="loading-section">
-      <div class="spinner"></div>
-      <h2>Authenticating...</h2>
-      <p>Please wait while we verify your card</p>
-    </div>
-  </div>
+        <div class="side-panel">
+            <div class="panel-card">
+                <h3>🔴 抽屉状态 LED</h3>
+                <div class="led-grid" id="ledGrid">
+                    <div class="led-item locked"><div class="led-number">1</div><div>Locked</div></div>
+                    <div class="led-item locked"><div class="led-number">2</div><div>Locked</div></div>
+                    <div class="led-item locked"><div class="led-number">3</div><div>Locked</div></div>
+                    <div class="led-item locked"><div class="led-number">4</div><div>Locked</div></div>
+                </div>
+            </div>
 
-  <!-- AUTHENTICATED State: User Session -->
-  <div id="state-authenticated" class="state-container hidden">
-    <div class="user-header">
-      <div class="user-avatar">👤</div>
-      <div class="user-info">
-        <h2 id="user-name">Welcome!</h2>
-        <p id="user-email"></p>
-      </div>
-    </div>
-    
-    <div class="session-card">
-      <h3>📦 Session in Progress</h3>
-      <ol class="session-steps">
-        <li>Take or return items as needed</li>
-        <li class="important">Close all cabinet doors when finished</li>
-        <li class="highlight"><strong>Tap your card once more to complete checkout</strong></li>
-      </ol>
-      
-      <div class="timeout-warning">
-        Auto-logout in <span id="countdown">30</span> seconds
-      </div>
-    </div>
-  </div>
+            <div class="panel-card">
+                <h3>📋 当前会话</h3>
+                <div id="sessionInfo">
+                    <div class="empty-state">
+                        <div class="empty-state-icon">📭</div>
+                        <p>暂无活动会话</p>
+                    </div>
+                </div>
+            </div>
 
-  <!-- CHECKOUT State: Item Summary -->
-  <div id="state-checkout" class="state-container hidden">
-    <div class="checkout-header">
-      <div class="success-icon">✅</div>
-      <h2>Checkout Complete!</h2>
-    </div>
-    
-    <div id="checkout-empty" class="checkout-content hidden">
-      <div class="empty-state">
-        <div class="empty-icon">📭</div>
-        <h3>No Items Changed</h3>
-        <p>No items were borrowed or returned during this session.</p>
-      </div>
-    </div>
-    
-    <div id="checkout-items" class="checkout-content">
-      <div id="borrowed-section" class="item-section hidden">
-        <h3 class="section-title borrowed">📤 Items Borrowed</h3>
-        <ul id="borrowed-list" class="item-list"></ul>
-      </div>
-      
-      <div id="returned-section" class="item-section hidden">
-        <h3 class="section-title returned">📥 Items Returned</h3>
-        <ul id="returned-list" class="item-list"></ul>
-      </div>
-    </div>
-    
-    <div class="checkout-footer">
-      <p id="email-notice">An email summary will be sent to your inbox.</p>
-      <p class="auto-logout">Returning to welcome screen in <span id="checkout-countdown">10</span> seconds...</p>
-    </div>
-  </div>
+            <div class="panel-card">
+                <h3>🔄 本次操作</h3>
+                <div class="transaction-list" id="transactionList">
+                    <div class="empty-state">
+                        <div class="empty-state-icon">📦</div>
+                        <p>等待操作...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
 
-  <!-- ERROR State -->
-  <div id="state-error" class="state-container hidden">
-    <div class="error-section">
-      <div class="error-icon">❌</div>
-      <h2>Access Denied</h2>
-      <p id="error-message">Your card is not authorized for this cabinet.</p>
-      <div class="error-countdown">Retry in <span id="error-countdown">5</span> seconds</div>
-    </div>
-  </div>
+    <script>
+        function updateClock() {
+            const now = new Date();
+            document.getElementById('clock').textContent = now.toLocaleTimeString('zh-CN', { hour12: false });
+        }
+        setInterval(updateClock, 1000);
+        updateClock();
 
-  <script src="renderer.js"></script>
+        function updateState(newState, message, user = null) {
+            const card = document.getElementById('stateCard');
+            const icon = document.getElementById('stateIcon');
+            const title = document.getElementById('stateTitle');
+            const msg = document.getElementById('stateMessage');
+            const userInfo = document.getElementById('userInfo');
+
+            card.classList.remove('locked', 'unlocked', 'processing');
+
+            switch(newState) {
+                case 'LOCKED':
+                    card.classList.add('locked');
+                    icon.textContent = '🔒';
+                    title.textContent = '系统已锁定';
+                    msg.textContent = message || '请将 NFC 卡靠近读卡器';
+                    userInfo.style.display = 'none';
+                    updateLEDs('locked');
+                    break;
+                case 'AUTHENTICATING':
+                    card.classList.add('processing');
+                    icon.textContent = '🔄';
+                    title.textContent = '验证中...';
+                    msg.textContent = message || '正在验证卡片信息';
+                    userInfo.style.display = 'none';
+                    break;
+                case 'UNLOCKED':
+                    card.classList.add('unlocked');
+                    icon.textContent = '🔓';
+                    title.textContent = '已解锁';
+                    msg.textContent = message || '请取/还工具，完成后再次拍卡';
+                    if (user) {
+                        document.getElementById('userName').textContent = user.name || user.user_name || 'Unknown';
+                        document.getElementById('userEmail').textContent = user.email || '';
+                        userInfo.style.display = 'block';
+                    }
+                    updateLEDs('unlocked');
+                    break;
+                case 'SCANNING':
+                    card.classList.add('processing');
+                    icon.textContent = '📡';
+                    title.textContent = '正在扫描...';
+                    msg.textContent = message || '请稍候，正在核对库存';
+                    updateLEDs('locked');
+                    break;
+                case 'ERROR':
+                    card.classList.add('locked');
+                    icon.textContent = '❌';
+                    title.textContent = '错误';
+                    msg.textContent = message || '操作失败，请重试';
+                    break;
+            }
+            card.classList.add('animate-in');
+            setTimeout(() => card.classList.remove('animate-in'), 500);
+        }
+
+        function updateLEDs(status) {
+            document.querySelectorAll('.led-item').forEach(led => {
+                led.classList.remove('locked', 'unlocked');
+                led.classList.add(status);
+                led.querySelector('div:last-child').textContent = status === 'locked' ? 'Locked' : 'Open';
+            });
+        }
+
+        function updateTransactions(borrowed, returned) {
+            const list = document.getElementById('transactionList');
+            if (borrowed.length === 0 && returned.length === 0) {
+                list.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📦</div><p>等待操作...</p></div>';
+                return;
+            }
+            let html = '';
+            borrowed.forEach(item => {
+                html += `<div class="transaction-item borrow"><div class="transaction-icon">📤</div><div class="transaction-name">${item.name || item.rfid}</div><div class="transaction-tag">${item.rfid}</div></div>`;
+            });
+            returned.forEach(item => {
+                html += `<div class="transaction-item return"><div class="transaction-icon">📥</div><div class="transaction-name">${item.name || item.rfid}</div><div class="transaction-tag">${item.rfid}</div></div>`;
+            });
+            list.innerHTML = html;
+        }
+
+        window.cabinetDisplay = { setState: updateState, setTransactions: updateTransactions, setLEDs: updateLEDs };
+
+        function demo() {
+            const states = [
+                { state: 'LOCKED', delay: 3000 },
+                { state: 'AUTHENTICATING', delay: 2000 },
+                { state: 'UNLOCKED', delay: 5000, user: { name: '张三', email: 'zhangsan@example.com' } },
+                { state: 'SCANNING', delay: 3000 },
+                { state: 'LOCKED', delay: 3000 }
+            ];
+            let index = 0;
+            function next() {
+                const s = states[index];
+                updateState(s.state, null, s.user);
+                if (s.state === 'SCANNING') {
+                    updateTransactions([{ name: 'Arduino Uno', rfid: 'RFID-001' }], [{ name: '万用表', rfid: 'RFID-003' }]);
+                } else if (s.state === 'LOCKED') {
+                    updateTransactions([], []);
+                }
+                index = (index + 1) % states.length;
+                setTimeout(next, s.delay);
+            }
+            next();
+        }
+        setTimeout(demo, 2000);
+    </script>
 </body>
 </html>

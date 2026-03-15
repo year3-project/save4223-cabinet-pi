@@ -12,6 +12,12 @@
     "cert_path": "/home/pi/cabinet/ssl/server.crt",
     "disable_warning": false
   },
+  "display": {
+    "enabled": true,
+    "fullscreen": true,
+    "width": 800,
+    "height": 480
+  },
   "api": {
     "timeout": 10,
     "max_retries": 3,
