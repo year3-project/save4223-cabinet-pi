@@ -509,7 +509,7 @@ class RaspberryPiHardware(HardwareInterface):
         except Exception as e:
             logger.error(f"Failed to initialize servo controller: {e}")
 
-        # Initialize NFC/QR reader
+        # Initialize NFC/QR reader (tries serial, then HID keyboard)
         self._init_nfc_reader()
 
         # Initialize RFID reader

@@ -31,6 +31,16 @@ def test_nfc_reader(hw):
     print("\n" + "="*50)
     print("TESTING NFC/QR READER")
     print("="*50)
+
+    # Check which reader is available
+    if hw._hid_reader and hw._hid_reader.is_available():
+        print("Using HID keyboard reader (NXP device)")
+    elif hw._nfc_reader and hw._nfc_reader.is_connected():
+        print("Using Serial NFC reader")
+    else:
+        print("WARNING: No NFC reader detected!")
+        return False
+
     print("Please tap a card or scan a QR code...")
 
     uid = hw.read_nfc(timeout=10)
