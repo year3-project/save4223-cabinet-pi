@@ -463,7 +463,7 @@ class RFIDReader:
 class RaspberryPiHardware(HardwareInterface):
     """Raspberry Pi hardware implementation."""
 
-    def __init__(self, num_drawers: int = 4, num_leds: int = 8):
+    def __init__(self, num_drawers: int = 4, num_leds: int = 8, nfc_mode: str = "auto"):
         self.num_drawers = num_drawers
         self.num_leds = num_leds
         self._initialized = False
@@ -471,6 +471,8 @@ class RaspberryPiHardware(HardwareInterface):
         self._servo_manager = None
         self._nfc_reader = None
         self._rfid_reader = None
+        self._hid_reader = None
+        self._nfc_mode = nfc_mode  # "auto", "serial", "hid", or "none"
 
     def initialize(self) -> None:
         """Initialize hardware components."""
@@ -508,12 +510,98 @@ class RaspberryPiHardware(HardwareInterface):
             logger.error(f"Failed to initialize servo controller: {e}")
 
         # Initialize NFC/QR reader
-        try:
-            self._nfc_reader = NFCQRReader()
-        except Exception as e:
-            logger.error(f"Failed to initialize NFC reader: {e}")
+        self._init_nfc_reader()
 
         # Initialize RFID reader
+        try:
+            self._rfid_reader = RFIDReader()
+        except Exception as e:
+            logger.error(f"Failed to initialize RFID reader: {e}")
+
+        self._initialized = True
+        logger.info("Raspberry Pi hardware initialized")
+
+    def _init_nfc_reader(self):
+        """Initialize NFC reader - tries serial first, then HID keyboard."""
+        if self._nfc_mode == "none":
+            logger.info("NFC reader disabled")
+            return
+
+        # Try serial reader first
+        if self._nfc_mode in ("auto", "serial"):
+            try:
+                self._nfc_reader = NFCQRReader()
+                if self._nfc_reader.is_connected():
+                    logger.info("Serial NFC reader initialized")
+                    return
+            except Exception as e:
+                logger.debug(f"Serial NFC reader not available: {e}")
+
+        # Try HID keyboard reader
+        if self._nfc_mode in ("auto", "hid"):
+            try:
+                from .hid_keyboard_reader import HIDKeyboardReader
+                self._hid_reader = HIDKeyboardReader()
+                if self._hid_reader.is_available():
+                    logger.info("HID keyboard NFC reader initialized")
+                    return
+            except Exception as e:
+                logger.debug(f"HID keyboard reader not available: {e}")
+
+        logger.warning("No NFC reader available")
+
+    def read_nfc(self, timeout: float = 30.0) -> Optional[str]:
+        """Read NFC card UID."""
+        # Try HID reader first (for keyboard emulation devices)
+        if self._hid_reader and self._hid_reader.is_available():
+            return self._hid_reader.read_card(timeout=timeout)
+
+        # Fall back to serial reader
+        if not self._nfc_reader:
+            return None
+
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            uid = self._nfc_reader.read_nfc_card()
+            if uid:
+                return uid
+            time.sleep(0.1)
+
+        return None
+
+    def read_qr(self, timeout: float = 30.0) -> Optional[str]:
+        """Read QR code."""
+        # Try HID reader first (for keyboard emulation devices)
+        if self._hid_reader and self._hid_reader.is_available():
+            result = self._hid_reader.read_card(timeout=timeout)
+            # HID reader returns the scanned text (could be QR content)
+            if result:
+                return result
+
+        # Fall back to serial reader
+        if not self._nfc_reader:
+            return None
+
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            qr = self._nfc_reader.read_qr_code()
+            if qr:
+                return qr
+            time.sleep(0.1)
+
+        return None
+
+    def read_rfid_tags(self, drawer_id: Optional[int] = None) -> List[str]:
+        """Read RFID tags."""
+        if not self._rfid_reader:
+            return []
+
+        return self._rfid_reader.read_rfid_tags_multiple()
+
+    def unlock_drawer(self, drawer_id: int) -> bool:
+        """Unlock a specific drawer."""
+        if not self._servo_manager or drawer_id < 0 or drawer_id >= len(SERVO_PINS):
+            return False
         try:
             self._rfid_reader = RFIDReader()
         except Exception as e:
