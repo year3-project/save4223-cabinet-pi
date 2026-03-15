@@ -33,9 +33,12 @@ class HIDKeyboardReader:
 
     # Common vendor IDs for NFC/QR keyboard readers
     KNOWN_VENDORS = {
-        '1fc9': 'NXP Semiconductors',
-        '1234': 'Generic HID',
+        0x1fc9: 'NXP Semiconductors',
+        0x1234: 'Generic HID',
     }
+
+    # Known device name patterns
+    KNOWN_NAME_PATTERNS = ['HIDKeyBoard', 'Scanner', 'Barcode', 'NFC', 'RFID']
 
     def __init__(self, device_path: Optional[str] = None):
         self.device = None
@@ -63,22 +66,30 @@ class HIDKeyboardReader:
             devices = [evdev.InputDevice(path) for path in evdev.list_devices()]
 
             for dev in devices:
-                # Look for keyboard devices that might be NFC readers
-                # Skip standard keyboards (usually have more keys)
                 caps = dev.capabilities()
 
                 # Check if it's a keyboard (has KEY events)
-                if ecodes.EV_KEY in caps:
-                    keys = caps[ecodes.EV_KEY]
+                if ecodes.EV_KEY not in caps:
+                    continue
 
-                    # NFC readers typically have limited keys (just alphanumeric)
-                    # Standard keyboards have 100+ keys
-                    if len(keys) < 50:
-                        logger.info(f"Found potential NFC reader: {dev.name} at {dev.path}")
-                        logger.info(f"  Vendor: {hex(dev.info.vendor)}, Product: {hex(dev.info.product)}")
+                # Check for known vendor IDs
+                is_known_vendor = dev.info.vendor in self.KNOWN_VENDORS
 
-                        if self._open_device(dev.path):
-                            return True
+                # Check for known name patterns
+                name_upper = dev.name.upper()
+                has_known_name = any(pattern.upper() in name_upper for pattern in self.KNOWN_NAME_PATTERNS)
+
+                # Check if it has limited keys (NFC readers usually don't have F-keys, etc.)
+                keys = caps[ecodes.EV_KEY]
+                has_limited_keys = len(keys) < 50
+
+                if is_known_vendor or has_known_name:
+                    logger.info(f"Found NFC/QR reader: {dev.name} at {dev.path}")
+                    logger.info(f"  Vendor: {hex(dev.info.vendor)} ({self.KNOWN_VENDORS.get(dev.info.vendor, 'Unknown')}), Product: {hex(dev.info.product)}")
+                    logger.info(f"  Keys: {len(keys)}")
+
+                    if self._open_device(dev.path):
+                        return True
 
             logger.warning("No HID keyboard reader found")
             return False
@@ -220,12 +231,19 @@ class HIDKeyboardReader:
 
             key_count = len(caps.get(ecodes.EV_KEY, []))
 
+            # Check for known patterns
+            name_upper = dev.name.upper()
+            is_known = any(pattern.upper() in name_upper for pattern in HIDKeyboardReader.KNOWN_NAME_PATTERNS)
+            is_known_vendor = dev.info.vendor in HIDKeyboardReader.KNOWN_VENDORS
+
             print(f"Path: {dev.path}")
             print(f"  Name: {dev.name}")
             print(f"  Vendor: {hex(dev.info.vendor)}, Product: {hex(dev.info.product)}")
             print(f"  Has keys: {has_keys} ({key_count} keys)")
 
-            if key_count < 50 and key_count > 0:
+            if is_known_vendor or is_known:
+                print(f"  *** NFC/QR READER DETECTED ***")
+            elif key_count < 50 and key_count > 0:
                 print(f"  *** Potential NFC/QR reader (limited keys) ***")
             print()
 
