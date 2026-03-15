@@ -24,6 +24,12 @@
     "height": 480
   },
   "hardware": {
-    "mode": "mock"
+    "mode": "mock",
+    "_comment_mode": "Set to 'raspberry_pi' for real hardware",
+    "rfid_reader_ip": "192.168.0.178",
+    "rfid_reader_port": 4001,
+    "servo_i2c_address": 64,
+    "servo_open_angle": 80,
+    "servo_close_angles": [30, 20, 20, 20]
   }
 }

@@ -30,8 +30,14 @@ from config import CONFIG
 HARDWARE_MODE = CONFIG.get('hardware', {}).get('mode', 'mock')
 if HARDWARE_MODE == 'mock':
     from hardware import MockHardware as HardwareController
+    logger.info("Using MockHardware (simulation mode)")
 else:
-    from hardware import RaspberryPiHardware as HardwareController
+    try:
+        from hardware import RaspberryPiHardware as HardwareController
+        logger.info("Using RaspberryPiHardware (real hardware)")
+    except ImportError as e:
+        logger.warning(f"RaspberryPiHardware not available: {e}, falling back to MockHardware")
+        from hardware import MockHardware as HardwareController
 
 # Display import (optional - falls back to console if nicegui not available)
 try:
