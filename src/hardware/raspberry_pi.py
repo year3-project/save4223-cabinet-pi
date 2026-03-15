@@ -15,12 +15,15 @@ from pathlib import Path
 
 try:
     import RPi.GPIO as GPIO
-    import smbus
+    try:
+        import smbus2 as smbus
+    except ImportError:
+        import smbus
     import serial
     RPI_AVAILABLE = True
-except ImportError:
+except ImportError as e:
     RPI_AVAILABLE = False
-    logging.warning("RPi.GPIO, smbus, or serial not available - running in simulation mode")
+    logging.warning(f"RPi libraries not available ({e}) - running in simulation mode")
 
 from .base import HardwareInterface, DrawerState, LEDColor
 

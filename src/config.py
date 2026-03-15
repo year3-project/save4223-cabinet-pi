@@ -7,7 +7,7 @@ from pathlib import Path
 # Default configuration
 DEFAULT_CONFIG = {
     # Server settings
-    'server_url': 'http://100.83.123.68:3000',
+    'server_url': 'http://100.125.135.46:3000',
     'edge_secret': 'edge_device_secret_key',
     'cabinet_id': 1,
 
