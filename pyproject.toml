@@ -20,4 +20,5 @@ dependencies = [
     "rpi-gpio>=0.7.1",
     "smbus2>=0.4.0",
     "spidev>=3.6",
+    "rpi-ws281x>=5.0.0",
 ]

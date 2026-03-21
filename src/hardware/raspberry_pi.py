@@ -52,6 +52,348 @@ IGNORED_TAGS = {"00B07A15306008EFF68E8F54"}
 NFC_BAUD_RATE = 115200
 
 
+class NFCQRReader:
+    """USB NFC/QR code reader."""
+
+    def __init__(self):
+        self.ser = None
+        self._auto_detect_port()
+
+    def _auto_detect_port(self):
+        """Auto-detect USB serial device."""
+        usb_patterns = ['/dev/ttyUSB*', '/dev/ttyACM*']
+
+        for pattern in usb_patterns:
+            ports = glob.glob(pattern)
+            for port in ports:
+                if self._try_connect(port):
+                    logger.info(f"NFC/QR reader connected at {port}")
+                    return
+
+        logger.warning("No USB NFC/QR reader found")
+
+    def _try_connect(self, port: str) -> bool:
+        """Try to connect to specified serial port."""
+        if not RPI_AVAILABLE:
+            return False
+
+        try:
+            self.ser = serial.Serial(
+                port=port,
+                baudrate=NFC_BAUD_RATE,
+                bytesize=serial.EIGHTBITS,
+                parity=serial.PARITY_NONE,
+                stopbits=serial.STOPBITS_ONE,
+                timeout=1
+            )
+
+            if self._test_connection():
+                return True
+            else:
+                self.ser.close()
+                return False
+
+        except (serial.SerialException, OSError) as e:
+            logger.debug(f"Failed to connect to {port}: {e}")
+            return False
+
+    def _test_connection(self) -> bool:
+        """Test device connection."""
+        try:
+            if self.ser and self.ser.is_open:
+                self.ser.reset_input_buffer()
+                self.ser.reset_output_buffer()
+                return True
+            return False
+        except:
+            return False
+
+    def is_connected(self) -> bool:
+        """Check if connected."""
+        return self.ser is not None and self.ser.is_open
+
+    def read_nfc_card(self) -> Optional[str]:
+        """Read NFC card UID."""
+        if not self.ser or not self.ser.is_open:
+            return None
+
+        try:
+            # Command to read UID
+            read_uid_command = bytes([
+                0x0E, 0x01, 0x26, 0x01, 0x00, 0x01, 0x0A,
+                0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xC4
+            ])
+
+            self.ser.reset_input_buffer()
+            self.ser.write(read_uid_command)
+            time.sleep(0.1)
+
+            if self.ser.in_waiting > 0:
+                response_len_byte = self.ser.read(1)
+
+                if len(response_len_byte) > 0:
+                    response_len = response_len_byte[0]
+
+                    if 0 < response_len < 32:
+                        remaining_bytes = self.ser.read(response_len - 1)
+                        response = response_len_byte + remaining_bytes
+
+                        if len(response) > 3:
+                            status = response[3]
+
+                            if status == 0x00 and response_len == 25:
+                                uid = response[4:8]
+                                uid_decimal = str(int.from_bytes(uid, byteorder='big'))
+                                logger.info(f"NFC card detected: {uid_decimal}")
+                                return uid_decimal
+            return None
+
+        except Exception as e:
+            logger.error(f"NFC read error: {e}")
+            return None
+
+    def read_qr_code(self) -> Optional[str]:
+        """Read QR code."""
+        try:
+            if self.ser and self.ser.in_waiting > 0:
+                self.ser.reset_input_buffer()
+                qr_data = self.ser.readline().decode('utf-8', errors='ignore').strip()
+                if qr_data and len(qr_data) > 0:
+                    logger.info(f"QR code detected: {qr_data}")
+                    return qr_data
+            return None
+        except Exception as e:
+            logger.error(f"QR read error: {e}")
+            return None
+
+    def close(self):
+        """Close serial connection."""
+        if self.ser and self.ser.is_open:
+            self.ser.close()
+
+
+class RFIDReader:
+    """TCP-based RFID reader for inventory scanning."""
+
+    def __init__(self, host: str = RFID_HOST, port: int = RFID_PORT):
+        self.host = host
+        self.port = port
+        self.socket = None
+        self.connected = False
+        self.reading = False
+        self.work_mode_tags = set()
+        self.current_cycle = 0
+        self.work_mode_cycles = RFID_READ_CYCLES
+        self._recv_buffer = bytearray()
+        self._idle_break_timeout = 0.2
+        self._max_cycle_wait = 2.0
+
+    def connect(self) -> bool:
+        """Connect to RFID reader."""
+        try:
+            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.socket.settimeout(5)
+            self.socket.connect((self.host, self.port))
+            self.connected = True
+            logger.info(f"RFID reader connected to {self.host}:{self.port}")
+            return True
+        except Exception as e:
+            logger.error(f"RFID connection failed: {e}")
+            self.connected = False
+            return False
+
+    def _checksum(self, data: bytes) -> int:
+        """Calculate checksum."""
+        uSum = 0
+        for byte in data:
+            uSum = (uSum + (byte & 0xFF)) & 0xFF
+        return ((~uSum) + 1) & 0xFF
+
+    def _build_packet(self, cmd: int, data: bytes = b'') -> bytes:
+        """Build protocol packet."""
+        length = 1 + 1 + len(data) + 1
+        packet_wo_checksum = bytes([0xA0, length & 0xFF, RFID_ADDRESS & 0xFF, cmd & 0xFF]) + data
+        cs = self._checksum(packet_wo_checksum)
+        return packet_wo_checksum + bytes([cs])
+
+    def read_rfid_tags_multiple(self) -> List[str]:
+        """Read RFID tags multiple times (work mode)."""
+        if not self.connect():
+            return []
+
+        self.work_mode_tags.clear()
+        self.current_cycle = 0
+        self.reading = True
+
+        logger.info(f"Starting RFID inventory - {self.work_mode_cycles} cycles")
+
+        try:
+            session = 0x01
+            target = 0x00
+            repeat = 0x01
+            cmd_payload = bytes([session, target, repeat])
+
+            while self.reading and self.current_cycle < self.work_mode_cycles:
+                before_cycle = set(self.work_mode_tags)
+
+                packet = self._build_packet(0x8B, cmd_payload)
+                if self.socket:
+                    self.socket.sendall(packet)
+
+                self._receive_and_process()
+
+                after_cycle = self.work_mode_tags
+                new_tags = after_cycle - before_cycle
+
+                if new_tags:
+                    logger.debug(f"[Cycle {self.current_cycle+1}] New tags: {list(new_tags)}")
+
+                self.current_cycle += 1
+                time.sleep(RFID_READ_INTERVAL)
+
+            tags_list = list(self.work_mode_tags)
+            logger.info(f"RFID inventory completed: {len(tags_list)} tags found")
+            return tags_list
+
+        except Exception as e:
+            logger.error(f"RFID read error: {e}")
+            return []
+        finally:
+            self.stop_reading()
+            self.disconnect()
+
+    def _receive_and_process(self):
+        """Receive and process RFID data."""
+        start_time = time.time()
+        last_data_time = time.time()
+
+        while self.reading and (time.time() - start_time) < self._max_cycle_wait:
+            try:
+                self.socket.settimeout(0.1)
+                data = self.socket.recv(4096)
+                if data:
+                    last_data_time = time.time()
+                    self._recv_buffer.extend(data)
+                    self._extract_frames_from_buffer()
+                else:
+                    if (time.time() - last_data_time) > self._idle_break_timeout:
+                        break
+            except socket.timeout:
+                if (time.time() - last_data_time) > self._idle_break_timeout:
+                    break
+                continue
+            except Exception as e:
+                logger.error(f"RFID receive error: {e}")
+                break
+
+    def _extract_frames_from_buffer(self):
+        """Extract frames from receive buffer."""
+        buf = self._recv_buffer
+        pos = 0
+
+        while pos + 5 <= len(buf):
+            if buf[pos] != 0xA0:
+                pos += 1
+                continue
+
+            length = buf[pos + 1]
+            frame_total_len = 2 + length
+
+            if pos + frame_total_len > len(buf):
+                break
+
+            frame = bytes(buf[pos: pos + frame_total_len])
+            received_cs = frame[-1]
+            calc_cs = self._checksum(frame[:-1])
+
+            if received_cs != calc_cs:
+                pos += 1
+                continue
+
+            try:
+                self._parse_frame(frame)
+            except Exception as e:
+                logger.debug(f"Frame parse error: {e}")
+
+            pos += frame_total_len
+
+        if pos > 0:
+            remaining = buf[pos:]
+            self._recv_buffer = bytearray(remaining)
+
+    def _parse_frame(self, frame: bytes):
+        """Parse a single frame."""
+        length = frame[1]
+        cmd = frame[3]
+        data_len = max(0, length - 3)
+        data = frame[4:4 + data_len] if data_len > 0 else b''
+
+        if cmd == 0x8B:
+            self._parse_tag_data_bytes(data)
+
+    def _parse_tag_data_bytes(self, data: bytes):
+        """Parse tag data from frame."""
+        pos = 0
+        while pos < len(data):
+            if pos + 4 > len(data):
+                break
+
+            freq_ant = data[pos]
+            pos += 1
+            antenna = (freq_ant & 0x03) + 1
+
+            pc_byte1 = data[pos]
+            pc_byte2 = data[pos + 1]
+            pos += 2
+            pc_value = (pc_byte1 << 8) | pc_byte2
+
+            epc_word_len = (pc_value >> 11) & 0x1F
+            epc_byte_len = epc_word_len * 2
+
+            if pos + epc_byte_len > len(data):
+                break
+
+            epc_data = data[pos: pos + epc_byte_len]
+            pos += epc_byte_len
+
+            if pos >= len(data):
+                break
+
+            rssi_byte = data[pos]
+            pos += 1
+
+            epc_hex = epc_data.hex().upper()
+            if self._validate_epc(epc_hex) and epc_hex not in IGNORED_TAGS:
+                self.work_mode_tags.add(epc_hex)
+
+    def _validate_epc(self, epc_hex: str) -> bool:
+        """Validate EPC data."""
+        if not epc_hex:
+            return False
+        if len(epc_hex) % 2 != 0 or len(epc_hex) < 4 or len(epc_hex) > 62:
+            return False
+        try:
+            bytes.fromhex(epc_hex)
+            return True
+        except:
+            return False
+
+    def stop_reading(self):
+        """Stop reading."""
+        self.reading = False
+
+    def disconnect(self):
+        """Disconnect from reader."""
+        self.stop_reading()
+        try:
+            if self.socket:
+                self.socket.close()
+        except:
+            pass
+        self.socket = None
+        self.connected = False
+
+
 class RaspberryPiHardware(HardwareInterface):
     """Raspberry Pi hardware implementation."""
 
@@ -320,9 +662,66 @@ class RaspberryPiHardware(HardwareInterface):
             "status": "healthy" if self._initialized else "not_initialized",
             "mode": "raspberry_pi",
             "rpi_available": RPI_AVAILABLE,
-            "servo": "ok" if self._servo_manager else "error",
-            "nfc": "ok" if self._nfc_reader and self._nfc_reader._test_connection() else "error",
+            "solenoids": "ok" if self._initialized else "error",
+            "nfc": "ok" if self._nfc_reader and self._nfc_reader._test_connection() else ("ok" if self._hid_reader and self._hid_reader.is_available() else "error"),
             "rfid": "ok" if self._rfid_reader else "error",
             "drawers": self.num_drawers,
             "leds": self.num_leds,
         }
+
+    def get_all_drawer_states(self) -> Dict[int, DrawerState]:
+        """Get states of all drawers."""
+        return {i: self.get_drawer_state(i) for i in range(self.num_drawers)}
+
+    def led_pattern(self, pattern: str, color: LEDColor, duration: float = 1.0) -> None:
+        """Run an LED pattern."""
+        import time as time_module
+
+        if not self._strip:
+            return
+
+        if pattern == "blink":
+            end_time = time_module.time() + duration
+            while time_module.time() < end_time:
+                self.set_all_leds(color)
+                time_module.sleep(0.25)
+                self.set_all_leds(LEDColor.OFF)
+                time_module.sleep(0.25)
+        elif pattern == "solid":
+            self.set_all_leds(color)
+        elif pattern == "chase":
+            end_time = time_module.time() + duration
+            while time_module.time() < end_time:
+                for i in range(LED_COUNT):
+                    self.set_led(i, color)
+                    time_module.sleep(0.1)
+                    self.set_led(i, LEDColor.OFF)
+        elif pattern == "pulse":
+            # Simple pulse - just blink quickly
+            end_time = time_module.time() + duration
+            while time_module.time() < end_time:
+                self.set_all_leds(color)
+                time_module.sleep(0.1)
+                self.set_all_leds(LEDColor.OFF)
+                time_module.sleep(0.1)
+        else:
+            self.set_all_leds(color)
+
+    def beep(self, duration: float = 0.1, frequency: Optional[int] = None) -> None:
+        """Play a beep sound (no buzzer hardware - no-op)."""
+        # No buzzer on current hardware
+        logger.debug(f"Beep: duration={duration}s, frequency={frequency}Hz (no hardware)")
+
+    def beep_success(self) -> None:
+        """Play success beep pattern."""
+        self.beep(0.1)
+
+    def beep_error(self) -> None:
+        """Play error beep pattern."""
+        self.beep(0.1)
+        time.sleep(0.05)
+        self.beep(0.1)
+
+    def beep_warning(self) -> None:
+        """Play warning beep pattern."""
+        self.beep(0.3)
