@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 # Configuration constants
 SOLENOID_PINS = [27, 22, 10, 9]  # Lock A -> D
-DRAWER_SWITCH_PINS = [26, 19, 13, 6]  # Switches 1 -> 4
+DRAWER_SWITCH_PINS = [26, 19, 6, 5]  # Switches 1 -> 4
 
 # WS2812B configuration
 LED_COUNT = 8        # Number of LED pixels
