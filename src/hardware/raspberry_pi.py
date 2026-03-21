@@ -668,3 +668,60 @@ class RaspberryPiHardware(HardwareInterface):
             "drawers": self.num_drawers,
             "leds": self.num_leds,
         }
+
+    def get_all_drawer_states(self) -> Dict[int, DrawerState]:
+        """Get states of all drawers."""
+        return {i: self.get_drawer_state(i) for i in range(self.num_drawers)}
+
+    def led_pattern(self, pattern: str, color: LEDColor, duration: float = 1.0) -> None:
+        """Run an LED pattern."""
+        import time as time_module
+
+        if not self._strip:
+            return
+
+        if pattern == "blink":
+            end_time = time_module.time() + duration
+            while time_module.time() < end_time:
+                self.set_all_leds(color)
+                time_module.sleep(0.25)
+                self.set_all_leds(LEDColor.OFF)
+                time_module.sleep(0.25)
+        elif pattern == "solid":
+            self.set_all_leds(color)
+        elif pattern == "chase":
+            end_time = time_module.time() + duration
+            while time_module.time() < end_time:
+                for i in range(LED_COUNT):
+                    self.set_led(i, color)
+                    time_module.sleep(0.1)
+                    self.set_led(i, LEDColor.OFF)
+        elif pattern == "pulse":
+            # Simple pulse - just blink quickly
+            end_time = time_module.time() + duration
+            while time_module.time() < end_time:
+                self.set_all_leds(color)
+                time_module.sleep(0.1)
+                self.set_all_leds(LEDColor.OFF)
+                time_module.sleep(0.1)
+        else:
+            self.set_all_leds(color)
+
+    def beep(self, duration: float = 0.1, frequency: Optional[int] = None) -> None:
+        """Play a beep sound (no buzzer hardware - no-op)."""
+        # No buzzer on current hardware
+        logger.debug(f"Beep: duration={duration}s, frequency={frequency}Hz (no hardware)")
+
+    def beep_success(self) -> None:
+        """Play success beep pattern."""
+        self.beep(0.1)
+
+    def beep_error(self) -> None:
+        """Play error beep pattern."""
+        self.beep(0.1)
+        time.sleep(0.05)
+        self.beep(0.1)
+
+    def beep_warning(self) -> None:
+        """Play warning beep pattern."""
+        self.beep(0.3)
