@@ -202,8 +202,8 @@ class SmartCabinet:
             'message': 'Reading card...'
         })
 
-        # Read NFC/QR
-        card_uid = self.hardware.read_nfc(timeout=30)
+        # Use card already captured in _handle_locked, or wait for a new scan
+        card_uid = self.current_card_uid or self.hardware.read_nfc(timeout=30)
 
         if not card_uid:
             logger.warning("Authentication timeout - no card detected")
@@ -672,6 +672,7 @@ class SmartCabinet:
         card = self.hardware.read_nfc(timeout=0.5)
         if card:
             logger.info(f"Card detected: {card[:10]}...")
+            self.current_card_uid = card  # Save so _on_authenticating doesn't re-read
             self.state_machine.transition(SystemState.AUTHENTICATING)
 
     def cleanup(self):
