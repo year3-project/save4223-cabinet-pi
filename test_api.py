@@ -7,7 +7,7 @@ import sys
 from uuid import uuid4
 
 # Configuration
-BASE_URL = "https://lovelace.tail20b481.ts.net:3001"
+BASE_URL = "https://save4223.isd-hub.com" 
 EDGE_SECRET = "edge_device_secret_key"
 CABINET_ID = 7  # Must match existing location in database
 

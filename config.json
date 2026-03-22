@@ -1,5 +1,5 @@
 {
-    "server_url": "https://lovelace.tail20b481.ts.net:3001",
+    "server_url": "https://save4223.isd-hub.com",
     "edge_secret": "edge_device_secret_key",
     "cabinet_id": 7,
     "db_path": "./data/local.db",
@@ -8,10 +8,10 @@
     "sync_interval": 60,
     "num_drawers": 4,
     "hardware": {
-        "mode": "mock"
+        "mode": "raspberry_pi",
     },
     "ssl": {
-        "verify": false
+        "verify": true
     },
     "api": {
         "timeout": 5,
