@@ -24,7 +24,7 @@ DEFAULT_CONFIG = {
 
     # Timing settings
     'session_timeout': 300,  # seconds (5 minutes)
-    'rfid_scan_count': 10,
+    'rfid_scan_count': 1,  # Number of times to call read_rfid_tags (each call does 5 cycles internally)
     'sync_interval': 60,    # seconds
     'api_timeout': 5,       # seconds
     'api_retry_count': 3,

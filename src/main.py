@@ -111,6 +111,9 @@ class SmartCabinet:
                 )
                 self.display.start()
                 logger.info("Display started")
+                # Give display time to initialize
+                import time
+                time.sleep(0.5)
             except Exception as e:
                 logger.warning(f"Failed to start display: {e}")
 
@@ -675,6 +678,10 @@ class SmartCabinet:
 
     def _handle_locked(self):
         """Poll for NFC in LOCKED state."""
+        # Skip if hardware not initialized yet
+        if not getattr(self.hardware, '_initialized', False):
+            return
+
         card = self.hardware.read_nfc(timeout=0.5)
         if card:
             logger.info(f"Card detected: {card[:10]}...")

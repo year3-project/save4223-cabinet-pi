@@ -203,8 +203,9 @@ class CabinetDisplayGUI:
                         ui.element('div').classes('cabinet-top')
 
                         # Cabinet body with 4 drawers stacked vertically
+                        # Reverse order: D3 at top, D0 at bottom to match physical wiring
                         with ui.element('div').classes('cabinet-body'):
-                            for i in range(4):
+                            for i in reversed(range(4)):
                                 with ui.element('div').classes('drawer'):
                                     indicator = ui.element('div').classes('drawer-indicator closed')
                                     self.drawer_indicators[i] = indicator
