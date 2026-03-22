@@ -46,11 +46,16 @@ class CabinetDisplayGUI:
         self.session_summary = {}
         self.stats = {}
 
-        # UI elements (initialized in setup)
+        # UI elements (initialized in setup when a browser connects)
         self.state_indicator = None
         self.status_title = None
         self.status_label = None
         self.user_card = None
+        self.user_name_label = None
+        self.user_email_label = None
+        self.summary_card = None
+        self.borrowed_list = None
+        self.returned_list = None
         self.items_container = None
         self.stats_label = None
         self.page = None
@@ -469,7 +474,7 @@ if __name__ == "__main__":
         try:
             while True:
                 # LOCKED - wait for NFC card
-                display.handle_message({
+                display._message_queue.put({
                     "type": "STATE_CHANGE",
                     "state": "LOCKED",
                     "message": "Tap card to unlock"
@@ -485,7 +490,7 @@ if __name__ == "__main__":
                 print(f"Card detected: {card_uid}")
 
                 # AUTHENTICATING
-                display.handle_message({
+                display._message_queue.put({
                     "type": "STATE_CHANGE",
                     "state": "AUTHENTICATING",
                     "message": f"Reading card {card_uid}..."
@@ -493,14 +498,14 @@ if __name__ == "__main__":
                 time.sleep(1)
 
                 # UNLOCKED
-                display.handle_message({
+                display._message_queue.put({
                     "type": "AUTH_SUCCESS",
                     "user": {"name": f"Card {card_uid}", "email": card_uid}
                 })
                 time.sleep(2)
 
                 # SCANNING - read RFID inventory
-                display.handle_message({
+                display._message_queue.put({
                     "type": "STATE_CHANGE",
                     "state": "SCANNING",
                     "message": "Scanning inventory..."
@@ -511,7 +516,7 @@ if __name__ == "__main__":
                 print(f"Found {len(tags)} tags: {tags}")
 
                 # SUMMARY
-                display.handle_message({
+                display._message_queue.put({
                     "type": "SESSION_SUMMARY",
                     "summary": {
                         "borrowed": [{"name": t} for t in tags],
