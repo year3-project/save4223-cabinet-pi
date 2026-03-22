@@ -294,8 +294,8 @@ class SmartCabinet:
         # Log access
         self.local_db.log_access(
             card_uid=self.current_card_uid,
-            action='AUTH_FAILURE',
-            details={'reason': reason}
+            user_id=None,
+            action='AUTH_FAILURE'
         )
 
         # Check if card is unpaired (needs pairing)
