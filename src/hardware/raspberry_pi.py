@@ -673,31 +673,69 @@ class RaspberryPiHardware(HardwareInterface):
             return
 
         if pattern == "blink":
-            end_time = time_module.time() + duration
-            while time_module.time() < end_time:
-                self.set_all_leds(color)
-                time_module.sleep(0.25)
-                self.set_all_leds(LEDColor.OFF)
-                time_module.sleep(0.25)
-        elif pattern == "solid":
-            self.set_all_leds(color)
+            self._led_blink(color, duration)
         elif pattern == "chase":
-            end_time = time_module.time() + duration
-            while time_module.time() < end_time:
-                for i in range(LED_COUNT):
-                    self.set_led(i, color)
-                    time_module.sleep(0.1)
-                    self.set_led(i, LEDColor.OFF)
-        elif pattern == "pulse":
-            # Simple pulse - just blink quickly
-            end_time = time_module.time() + duration
-            while time_module.time() < end_time:
-                self.set_all_leds(color)
-                time_module.sleep(0.1)
-                self.set_all_leds(LEDColor.OFF)
-                time_module.sleep(0.1)
+            self._led_chase(color, duration)
+        elif pattern == "rainbow":
+            self.rainbow_breath()
         else:
+            logger.warning(f"Unknown LED pattern: {pattern}")
+
+    def _led_blink(self, color: LEDColor, duration: float):
+        """Blink the LEDs."""
+        end_time = time.time() + duration
+        while time.time() < end_time:
             self.set_all_leds(color)
+            time.sleep(0.25)
+            self.set_all_leds(LEDColor.OFF)
+            time.sleep(0.25)
+
+    def _led_chase(self, color: LEDColor, duration: float):
+        """Chase the LEDs."""
+        end_time = time.time() + duration
+        step_delay = max(0.005, duration / max(1, LED_COUNT))  # fit full loop in requested duration
+        while time.time() < end_time:
+            for i in range(LED_COUNT):
+                self.set_led(i, color)
+                time.sleep(step_delay)
+                self.set_led(i, LEDColor.OFF)
+        return
+
+    @staticmethod
+    def wheel(pos: int):
+        """Color helper for rainbow patterns (0-255)."""
+        pos = max(0, min(255, pos))
+
+        if pos < 85:
+            return Color(pos * 3, 255 - pos * 3, 0)
+        if pos < 170:
+            pos -= 85
+            return Color(255 - pos * 3, 0, pos * 3)
+
+        pos -= 170
+        return Color(0, pos * 3, 255 - pos * 3)
+
+    def rainbow_cycle(self, wait_ms=20, iterations=5):
+        """Draw rainbow that fades across all pixels at once."""
+        if not self._strip:
+            return
+
+        delay = max(0.005, wait_ms / 1000.0)
+        for j in range(256 * iterations):
+            for i in range(self._strip.numPixels()):
+                self._strip.setPixelColor(i, self.wheel((i + j) & 255))
+            self._strip.show()
+            time.sleep(delay)
+
+    def rainbow_breath(self, wait_ms=12, iterations=5, brightness_steps=45):
+        """Rainbow colors at constant brightness (no breathing)."""
+        if not self._strip:
+            return
+
+        # Keep a steady brightness and reuse the existing rainbow cycle
+        self._strip.setBrightness(LED_BRIGHTNESS)
+        for _ in range(iterations):
+            self.rainbow_cycle(wait_ms=wait_ms, iterations=1)
 
     def beep(self, duration: float = 0.1, frequency: Optional[int] = None) -> None:
         """Play a beep sound (no buzzer hardware - no-op)."""
