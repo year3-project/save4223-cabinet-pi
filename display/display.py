@@ -649,57 +649,20 @@ class DisplayThread:
         })
 
 
-# Standalone test with real hardware
+# Standalone test with real hardware (no mock data)
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
-    # Try to import real hardware
+    # Try to import real hardware for drawer state polling only
     try:
         sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
         from hardware import RaspberryPiHardware
         hw = RaspberryPiHardware()
         hw.initialize()
-        print("Using RaspberryPiHardware")
+        print("Using RaspberryPiHardware - drawer states will be live")
     except Exception as e:
         print(f"Hardware not available: {e}")
         hw = None
 
     display = CabinetDisplayGUI(fullscreen=False, hardware=hw)
-
-    if hw:
-        def demo_loop():
-            """Demo loop with real hardware."""
-            time.sleep(3)
-
-            # Login success
-            display._message_queue.put({
-                "type": "AUTH_SUCCESS",
-                "user": {"name": "Demo User"}
-            })
-            time.sleep(5)
-
-            # Try checkout (will check real drawer states)
-            display._message_queue.put({"type": "CHECKOUT_ATTEMPT"})
-
-            # Wait for user to close drawers or continue
-            time.sleep(10)
-
-            # Simulate scanning
-            display._message_queue.put({"type": "STATE_CHANGE", "state": "RFID_SCANNING"})
-            time.sleep(3)
-
-            # Show summary
-            display._message_queue.put({
-                "type": "SESSION_SUMMARY",
-                "user_name": "Demo User",
-                "borrowed": [{"name": "Arduino Uno", "rfid": "RFID-001"}],
-                "returned": [{"name": "Multimeter", "rfid": "RFID-003"}]
-            })
-            time.sleep(5)
-
-            # Back to idle
-            display._message_queue.put({"type": "STATE_CHANGE", "state": "IDLE"})
-
-        threading.Thread(target=demo_loop, daemon=True).start()
-
     display.run()
