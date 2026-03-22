@@ -18,113 +18,80 @@
 
         /* Left side - Cabinet visualization */
         .cabinet-panel {
-            flex: 1;
+            flex: 0.8;
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            padding: 40px;
+            padding: 30px;
             background: rgba(0, 0, 0, 0.2);
         }
 
         .cabinet-title {
-            font-size: 24px;
+            font-size: 18px;
             font-weight: 600;
             color: #8892b0;
-            margin-bottom: 30px;
+            margin-bottom: 20px;
             text-transform: uppercase;
-            letter-spacing: 2px;
+            letter-spacing: 1px;
         }
 
-        .cabinet-visualization {
+        .cabinet-container {
             position: relative;
-            width: 280px;
+            width: 200px;
         }
 
-        /* Cabinet top */
+        /* Cabinet top (wood grain) */
         .cabinet-top {
             width: 100%;
-            height: 30px;
+            height: 25px;
             background: linear-gradient(180deg, #d4a574 0%, #c4956a 100%);
             border-radius: 8px 8px 0 0;
-            margin-bottom: 4px;
         }
 
-        /* Cabinet body with drawers */
+        /* Cabinet body with 4 vertical drawers */
         .cabinet-body {
-            display: flex;
-            gap: 4px;
             background: #2d2d3a;
             padding: 8px;
             border-radius: 0 0 8px 8px;
-        }
-
-        /* Left column - 3 drawers */
-        .drawer-column-left {
-            flex: 1;
             display: flex;
             flex-direction: column;
-            gap: 4px;
-        }
-
-        /* Right column - 1 drawer */
-        .drawer-column-right {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            justify-content: flex-end;
+            gap: 6px;
         }
 
         .drawer {
             position: relative;
-            height: 80px;
+            height: 60px;
             border-radius: 6px;
+            background: linear-gradient(135deg, #5a9fd4 0%, #4a8fc4 100%);
             display: flex;
             align-items: center;
             justify-content: center;
             transition: all 0.3s ease;
-            cursor: default;
         }
 
-        .drawer.left {
-            background: linear-gradient(135deg, #7ec8e3 0%, #6bb8d3 100%);
-        }
-
-        .drawer.right {
-            background: linear-gradient(135deg, #d4a5d4 0%, #c495c4 100%);
-            height: 248px;
-        }
-
-        /* Drawer handle */
         .drawer-handle {
-            width: 60%;
-            height: 8px;
+            width: 50%;
+            height: 6px;
             background: #333;
-            border-radius: 4px;
-            position: absolute;
-            top: 50%;
-            transform: translateY(-50%);
+            border-radius: 3px;
         }
 
         /* Status indicator light */
         .drawer-indicator {
             position: absolute;
-            top: 8px;
+            top: 6px;
             right: 8px;
-            width: 12px;
-            height: 12px;
+            width: 10px;
+            height: 10px;
             border-radius: 50%;
             background: transparent;
             transition: all 0.3s ease;
         }
 
-        .drawer-indicator.closed {
-            background: transparent;
-        }
-
         .drawer-indicator.open {
             background: #ff4757;
-            box-shadow: 0 0 10px #ff4757, 0 0 20px #ff4757;
+            box-shadow: 0 0 8px #ff4757, 0 0 16px #ff4757;
             animation: pulse-warning 1s infinite;
         }
 
@@ -135,9 +102,9 @@
 
         .drawer-number {
             position: absolute;
-            bottom: 8px;
-            left: 8px;
-            font-size: 12px;
+            bottom: 4px;
+            left: 6px;
+            font-size: 10px;
             font-weight: 600;
             color: rgba(0, 0, 0, 0.3);
         }
@@ -149,63 +116,63 @@
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            padding: 60px;
+            padding: 40px;
         }
 
         .welcome-title {
-            font-size: 56px;
+            font-size: 42px;
             font-weight: 700;
             background: linear-gradient(135deg, #00d9ff 0%, #00ff88 100%);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             background-clip: text;
-            margin-bottom: 40px;
+            margin-bottom: 30px;
             text-align: center;
         }
 
         .status-card {
             background: rgba(255, 255, 255, 0.05);
             border: 2px solid rgba(255, 255, 255, 0.1);
-            border-radius: 20px;
-            padding: 40px 60px;
+            border-radius: 16px;
+            padding: 30px 40px;
             text-align: center;
-            max-width: 500px;
+            max-width: 450px;
             width: 100%;
             transition: all 0.5s ease;
         }
 
         .status-card.success {
             border-color: #00ff88;
-            box-shadow: 0 0 30px rgba(0, 255, 136, 0.2);
+            box-shadow: 0 0 20px rgba(0, 255, 136, 0.2);
         }
 
         .status-card.warning {
             border-color: #ff4757;
-            box-shadow: 0 0 30px rgba(255, 71, 87, 0.2);
+            box-shadow: 0 0 20px rgba(255, 71, 87, 0.2);
         }
 
         .status-card.processing {
             border-color: #ffd700;
-            box-shadow: 0 0 30px rgba(255, 215, 0, 0.2);
+            box-shadow: 0 0 20px rgba(255, 215, 0, 0.2);
         }
 
         .status-icon {
-            font-size: 64px;
-            margin-bottom: 20px;
+            font-size: 48px;
+            margin-bottom: 15px;
         }
 
         .status-message {
-            font-size: 24px;
+            font-size: 20px;
             color: #e0e0e0;
-            line-height: 1.5;
+            line-height: 1.4;
         }
 
         /* User info display */
         .user-info {
-            margin-top: 30px;
-            padding: 20px 30px;
+            margin-top: 20px;
+            padding: 15px 25px;
             background: rgba(0, 217, 255, 0.1);
-            border-radius: 12px;
+            border-radius: 10px;
             border: 1px solid rgba(0, 217, 255, 0.3);
             display: none;
         }
@@ -215,33 +182,34 @@
         }
 
         .user-name {
-            font-size: 28px;
+            font-size: 22px;
             font-weight: 600;
             color: #00d9ff;
         }
 
         /* Transaction summary */
         .transaction-summary {
-            margin-top: 30px;
+            margin-top: 20px;
             text-align: left;
             display: none;
         }
 
         .transaction-summary.visible {
-            display: block;
+            display: flex;
+            flex-direction: column;
         }
 
         .transaction-section {
-            margin-bottom: 20px;
+            margin-bottom: 12px;
         }
 
         .transaction-section h4 {
-            font-size: 16px;
+            font-size: 14px;
             font-weight: 600;
-            margin-bottom: 10px;
+            margin-bottom: 6px;
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: 6px;
         }
 
         .transaction-section.borrowed h4 {
@@ -253,40 +221,32 @@
         }
 
         .transaction-item {
-            padding: 10px 15px;
+            padding: 6px 10px;
             background: rgba(255, 255, 255, 0.05);
-            border-radius: 8px;
-            margin-bottom: 8px;
+            border-radius: 6px;
+            margin-bottom: 4px;
             display: flex;
             align-items: center;
-            gap: 12px;
-        }
-
-        .transaction-item .icon {
-            font-size: 20px;
-        }
-
-        .transaction-item .name {
-            flex: 1;
-            font-size: 16px;
+            gap: 8px;
+            font-size: 13px;
         }
 
         /* Scanning animation */
-        .scanning-animation {
+        .scanning-dots {
             display: none;
             align-items: center;
             justify-content: center;
-            gap: 10px;
-            margin-top: 20px;
+            gap: 6px;
+            margin-top: 15px;
         }
 
-        .scanning-animation.visible {
+        .scanning-dots.visible {
             display: flex;
         }
 
         .scanning-dot {
-            width: 12px;
-            height: 12px;
+            width: 10px;
+            height: 10px;
             background: #ffd700;
             border-radius: 50%;
             animation: scanning-pulse 1.4s infinite ease-in-out;
@@ -303,11 +263,11 @@
 
         /* Warning message */
         .warning-details {
-            margin-top: 15px;
-            padding: 15px;
+            margin-top: 12px;
+            padding: 10px;
             background: rgba(255, 71, 87, 0.1);
-            border-radius: 8px;
-            font-size: 16px;
+            border-radius: 6px;
+            font-size: 14px;
             color: #ff6b6b;
             display: none;
         }
@@ -316,52 +276,40 @@
             display: block;
         }
 
-        /* Footer */
-        .footer {
-            position: fixed;
-            bottom: 20px;
-            right: 40px;
-            font-size: 14px;
-            color: #4a5568;
+        .hidden {
+            display: none !important;
         }
     </style>
 </head>
 <body>
-    <!-- Left Panel: Cabinet Visualization -->
+    <!-- Left Panel: Cabinet Visualization (4 vertical drawers) -->
     <div class="cabinet-panel">
         <div class="cabinet-title">Cabinet Status</div>
-        <div class="cabinet-visualization">
-            <!-- Cabinet Top (wood grain) -->
+        <div class="cabinet-container">
+            <!-- Cabinet Top (wood) -->
             <div class="cabinet-top"></div>
 
-            <!-- Cabinet Body -->
+            <!-- Cabinet Body: 4 drawers stacked vertically -->
             <div class="cabinet-body">
-                <!-- Left Column: 3 Drawers -->
-                <div class="drawer-column-left">
-                    <div class="drawer left" id="drawer-1">
-                        <div class="drawer-indicator closed" id="indicator-1"></div>
-                        <div class="drawer-handle"></div>
-                        <div class="drawer-number">1</div>
-                    </div>
-                    <div class="drawer left" id="drawer-2">
-                        <div class="drawer-indicator closed" id="indicator-2"></div>
-                        <div class="drawer-handle"></div>
-                        <div class="drawer-number">2</div>
-                    </div>
-                    <div class="drawer left" id="drawer-3">
-                        <div class="drawer-indicator closed" id="indicator-3"></div>
-                        <div class="drawer-handle"></div>
-                        <div class="drawer-number">3</div>
-                    </div>
+                <div class="drawer" id="drawer-0">
+                    <div class="drawer-indicator" id="indicator-0"></div>
+                    <div class="drawer-handle"></div>
+                    <div class="drawer-number">1</div>
                 </div>
-
-                <!-- Right Column: 1 Drawer -->
-                <div class="drawer-column-right">
-                    <div class="drawer right" id="drawer-4">
-                        <div class="drawer-indicator closed" id="indicator-4"></div>
-                        <div class="drawer-handle"></div>
-                        <div class="drawer-number">4</div>
-                    </div>
+                <div class="drawer" id="drawer-1">
+                    <div class="drawer-indicator" id="indicator-1"></div>
+                    <div class="drawer-handle"></div>
+                    <div class="drawer-number">2</div>
+                </div>
+                <div class="drawer" id="drawer-2">
+                    <div class="drawer-indicator" id="indicator-2"></div>
+                    <div class="drawer-handle"></div>
+                    <div class="drawer-number">3</div>
+                </div>
+                <div class="drawer" id="drawer-3">
+                    <div class="drawer-indicator" id="indicator-3"></div>
+                    <div class="drawer-handle"></div>
+                    <div class="drawer-number">4</div>
                 </div>
             </div>
         </div>
@@ -377,7 +325,7 @@
                 Tap your card to access the cabinet
             </div>
 
-            <div class="scanning-animation" id="scanningAnimation">
+            <div class="scanning-dots" id="scanningAnimation">
                 <div class="scanning-dot"></div>
                 <div class="scanning-dot"></div>
                 <div class="scanning-dot"></div>
@@ -402,8 +350,6 @@
         </div>
     </div>
 
-    <div class="footer" id="footer">Save4223 Smart Cabinet</div>
-
     <script>
         // State management
         const DisplayState = {
@@ -417,7 +363,7 @@
 
         let currentState = DisplayState.IDLE;
         let currentUser = null;
-        let drawerStates = { 1: false, 2: false, 3: false, 4: false }; // false = closed, true = open
+        let drawerStates = { 0: false, 1: false, 2: false, 3: false }; // false = closed, true = open
 
         // DOM elements
         const statusCard = document.getElementById('statusCard');
@@ -431,17 +377,15 @@
         const borrowedList = document.getElementById('borrowedList');
         const returnedList = document.getElementById('returnedList');
 
-        // Update drawer indicators
+        // Update drawer indicators (0-indexed)
         function updateDrawerIndicators(states) {
             drawerStates = states || drawerStates;
-            for (let i = 1; i <= 4; i++) {
+            for (let i = 0; i < 4; i++) {
                 const indicator = document.getElementById(`indicator-${i}`);
                 if (drawerStates[i]) {
-                    indicator.classList.remove('closed');
                     indicator.classList.add('open');
                 } else {
                     indicator.classList.remove('open');
-                    indicator.classList.add('closed');
                 }
             }
         }
@@ -449,6 +393,13 @@
         // Check if any drawer is open
         function anyDrawerOpen() {
             return Object.values(drawerStates).some(open => open);
+        }
+
+        // Get open drawer numbers (1-indexed for display)
+        function getOpenDrawerNumbers() {
+            return Object.entries(drawerStates)
+                .filter(([_, open]) => open)
+                .map(([idx]) => parseInt(idx) + 1);
         }
 
         // Set display state
@@ -465,13 +416,13 @@
             switch (newState) {
                 case DisplayState.IDLE:
                     statusIcon.textContent = '💳';
-                    statusMessage.textContent = 'Tap your card to access the cabinet';
+                    statusMessage.textContent = data.message || 'Tap your card to access the cabinet';
                     break;
 
                 case DisplayState.LOGIN_SUCCESS:
                     statusCard.classList.add('success');
                     statusIcon.textContent = '✅';
-                    statusMessage.textContent = 'Login successful, you may now open the cabinet';
+                    statusMessage.textContent = data.message || 'Login successful, you may now open the cabinet';
                     if (data.user) {
                         currentUser = data.user;
                         userName.textContent = data.user.name || data.user.user_name || 'User';
@@ -482,9 +433,10 @@
                 case DisplayState.CHECKOUT_WARNING:
                     statusCard.classList.add('warning');
                     statusIcon.textContent = '⚠️';
-                    statusMessage.textContent = 'Please close all drawers to complete checkout';
-                    if (data.openDrawers && data.openDrawers.length > 0) {
-                        warningDetails.textContent = `Open drawers: ${data.openDrawers.join(', ')}`;
+                    statusMessage.textContent = data.message || 'Please close all drawers to complete checkout';
+                    const openDrawers = getOpenDrawerNumbers();
+                    if (openDrawers.length > 0) {
+                        warningDetails.textContent = `Open drawers: ${openDrawers.join(', ')}`;
                         warningDetails.classList.add('visible');
                     }
                     break;
@@ -492,14 +444,14 @@
                 case DisplayState.RFID_SCANNING:
                     statusCard.classList.add('processing');
                     statusIcon.textContent = '📡';
-                    statusMessage.textContent = 'RFID Scanning in progress';
+                    statusMessage.textContent = data.message || 'RFID Scanning in progress';
                     scanningAnimation.classList.add('visible');
                     break;
 
                 case DisplayState.SESSION_SUMMARY:
                     statusCard.classList.add('success');
                     statusIcon.textContent = '✓';
-                    statusMessage.textContent = 'Session complete!';
+                    statusMessage.textContent = data.message || 'Session complete!';
                     if (data.user) {
                         userName.textContent = data.user.name || 'User';
                         userInfo.classList.add('visible');
@@ -524,8 +476,8 @@
             if (borrowed.length > 0) {
                 borrowedList.innerHTML = borrowed.map(item =>
                     `<div class="transaction-item">
-                        <span class="icon">📤</span>
-                        <span class="name">${item.name || item.rfid}</span>
+                        <span>📤</span>
+                        <span>${item.name || item.rfid}</span>
                     </div>`
                 ).join('');
                 document.getElementById('borrowedSection').style.display = 'block';
@@ -537,8 +489,8 @@
             if (returned.length > 0) {
                 returnedList.innerHTML = returned.map(item =>
                     `<div class="transaction-item">
-                        <span class="icon">📥</span>
-                        <span class="name">${item.name || item.rfid}</span>
+                        <span>📥</span>
+                        <span>${item.name || item.rfid}</span>
                     </div>`
                 ).join('');
                 document.getElementById('returnedSection').style.display = 'block';
@@ -547,14 +499,10 @@
             }
         }
 
-        // Handle card tap (checkout flow)
+        // Handle checkout attempt (check if drawers closed)
         function handleCheckoutTap() {
-            // Check if all drawers are closed
             if (anyDrawerOpen()) {
-                const openDrawers = Object.entries(drawerStates)
-                    .filter(([_, open]) => open)
-                    .map(([num]) => num);
-                setState(DisplayState.CHECKOUT_WARNING, { openDrawers });
+                setState(DisplayState.CHECKOUT_WARNING);
                 return false;
             }
             return true;
@@ -576,7 +524,7 @@
 
             // IDLE state
             setState(DisplayState.IDLE);
-            updateDrawerIndicators({ 1: false, 2: false, 3: false, 4: false });
+            updateDrawerIndicators({ 0: false, 1: false, 2: false, 3: false });
 
             setTimeout(() => {
                 // Login success
@@ -587,7 +535,7 @@
 
             setTimeout(() => {
                 // Simulate drawer opening
-                updateDrawerIndicators({ 1: true, 2: false, 3: true, 4: false });
+                updateDrawerIndicators({ 0: true, 1: false, 2: true, 3: false });
             }, 6000);
 
             setTimeout(() => {
@@ -597,7 +545,7 @@
 
             setTimeout(() => {
                 // Close drawers
-                updateDrawerIndicators({ 1: false, 2: false, 3: false, 4: false });
+                updateDrawerIndicators({ 0: false, 1: false, 2: false, 3: false });
                 // Start scanning
                 setState(DisplayState.RFID_SCANNING);
             }, 11000);

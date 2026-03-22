@@ -4,8 +4,10 @@ Pure Python web UI - no npm/Electron needed.
 Runs in browser with live WebSocket updates.
 
 New UI Layout:
-- Left: Cabinet visualization with 4 drawers and status indicators
+- Left: Cabinet visualization with 4 vertical drawers and status indicators
 - Right: Welcome message + status information
+
+Integrates with real hardware for NFC reading and drawer switch state.
 """
 
 import json
@@ -15,6 +17,9 @@ from datetime import datetime
 from typing import Optional, Dict, Any, List
 from pathlib import Path
 from enum import Enum
+import sys
+import threading
+import time
 
 try:
     from nicegui import ui, app
@@ -39,13 +44,15 @@ class DisplayState(Enum):
 class CabinetDisplayGUI:
     """NiceGUI display for cabinet with new layout."""
 
-    def __init__(self, host: str = "0.0.0.0", port: int = 8080, fullscreen: bool = True):
+    def __init__(self, host: str = "0.0.0.0", port: int = 8080, fullscreen: bool = True,
+                 hardware=None):
         """Initialize display.
 
         Args:
             host: Host to bind to
             port: Port to serve on
             fullscreen: Whether to launch in fullscreen/kiosk mode
+            hardware: Hardware interface instance for real sensor reading
         """
         if not NICEGUI_AVAILABLE:
             raise ImportError("nicegui is required. Install with: pip install nicegui")
@@ -53,32 +60,36 @@ class CabinetDisplayGUI:
         self.host = host
         self.port = port
         self.fullscreen = fullscreen
+        self.hardware = hardware
 
         # Current state
         self.current_state = DisplayState.IDLE
         self.current_user: Optional[Dict] = None
         self.status_message = "Tap your card to access the cabinet"
-        self.drawer_states: Dict[int, bool] = {1: False, 2: False, 3: False, 4: False}
+        self.drawer_states: Dict[int, bool] = {0: False, 1: False, 2: False, 3: False}
         self.session_summary: Dict[str, List] = {"borrowed": [], "returned": []}
 
         # UI elements
-        self.state_indicator = None
-        self.status_title = None
+        self.drawer_indicators: Dict[int, Any] = {}
+        self.status_card = None
+        self.status_icon = None
         self.status_label = None
         self.user_card = None
         self.user_name_label = None
         self.summary_container = None
         self.borrowed_list = None
         self.returned_list = None
-        self.drawer_indicators: Dict[int, Any] = {}
         self.warning_label = None
-        self.scanning_dots = None
+        self.scanning_container = None
 
         # Track connected clients
         self.clients = set()
 
         # Thread-safe queue for messages
         self._message_queue = queue.Queue()
+
+        # Hardware polling
+        self._poll_hardware = True
 
     def setup(self):
         """Set up the UI."""
@@ -101,12 +112,12 @@ class CabinetDisplayGUI:
                         display: flex;
                     }
                     .cabinet-panel {
-                        flex: 1;
+                        flex: 0.8;
                         display: flex;
                         flex-direction: column;
                         align-items: center;
                         justify-content: center;
-                        padding: 40px;
+                        padding: 30px;
                         background: rgba(0, 0, 0, 0.2);
                     }
                     .status-panel {
@@ -115,31 +126,74 @@ class CabinetDisplayGUI:
                         flex-direction: column;
                         align-items: center;
                         justify-content: center;
-                        padding: 60px;
+                        padding: 40px;
                     }
-                    .drawer { position: relative; transition: all 0.3s ease; }
+                    .cabinet-container {
+                        position: relative;
+                        width: 200px;
+                    }
+                    .cabinet-top {
+                        width: 100%;
+                        height: 25px;
+                        background: linear-gradient(180deg, #d4a574 0%, #c4956a 100%);
+                        border-radius: 8px 8px 0 0;
+                    }
+                    .cabinet-body {
+                        background: #2d2d3a;
+                        padding: 8px;
+                        border-radius: 0 0 8px 8px;
+                        display: flex;
+                        flex-direction: column;
+                        gap: 6px;
+                    }
+                    .drawer {
+                        position: relative;
+                        height: 60px;
+                        border-radius: 6px;
+                        background: linear-gradient(135deg, #5a9fd4 0%, #4a8fc4 100%);
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                    }
+                    .drawer-handle {
+                        width: 50%;
+                        height: 6px;
+                        background: #333;
+                        border-radius: 3px;
+                    }
                     .drawer-indicator {
                         position: absolute;
-                        top: 8px;
+                        top: 6px;
                         right: 8px;
-                        width: 12px;
-                        height: 12px;
+                        width: 10px;
+                        height: 10px;
                         border-radius: 50%;
                         transition: all 0.3s ease;
                     }
-                    .drawer-indicator.closed { background: transparent; }
+                    .drawer-indicator.closed {
+                        background: transparent;
+                    }
                     .drawer-indicator.open {
                         background: #ff4757;
-                        box-shadow: 0 0 10px #ff4757, 0 0 20px #ff4757;
+                        box-shadow: 0 0 8px #ff4757, 0 0 16px #ff4757;
+                        animation: pulse-warning 1s infinite;
+                    }
+                    .drawer-number {
+                        position: absolute;
+                        bottom: 4px;
+                        left: 6px;
+                        font-size: 10px;
+                        color: rgba(0,0,0,0.3);
+                        font-weight: 600;
                     }
                     @keyframes pulse-warning {
                         0%, 100% { opacity: 1; }
                         50% { opacity: 0.5; }
                     }
-                    .scanning-dots { display: flex; gap: 8px; }
+                    .scanning-dots { display: flex; gap: 6px; margin-top: 15px; }
                     .scanning-dot {
-                        width: 12px;
-                        height: 12px;
+                        width: 10px;
+                        height: 10px;
                         background: #ffd700;
                         border-radius: 50%;
                         animation: scan-pulse 1.4s infinite;
@@ -150,117 +204,111 @@ class CabinetDisplayGUI:
                         0%, 80%, 100% { transform: scale(0.6); opacity: 0.5; }
                         40% { transform: scale(1); opacity: 1; }
                     }
+                    .hidden { display: none !important; }
                 </style>
             ''')
 
             with ui.element('div').classes('w-full h-screen flex'):
-                # Left Panel: Cabinet Visualization
+                # Left Panel: Cabinet Visualization (4 vertical drawers)
                 with ui.element('div').classes('cabinet-panel'):
-                    ui.label('Cabinet Status').style('font-size: 24px; color: #8892b0; margin-bottom: 30px; letter-spacing: 2px;')
+                    ui.label('Cabinet Status').style('font-size: 18px; color: #8892b0; margin-bottom: 20px; letter-spacing: 1px; text-transform: uppercase;')
 
-                    with ui.element('div').style('width: 280px;'):
-                        # Cabinet top
-                        ui.element('div').style('''
-                            width: 100%; height: 30px;
-                            background: linear-gradient(180deg, #d4a574 0%, #c4956a 100%);
-                            border-radius: 8px 8px 0 0; margin-bottom: 4px;
-                        ''')
+                    with ui.element('div').classes('cabinet-container'):
+                        # Cabinet top (wood)
+                        ui.element('div').classes('cabinet-top')
 
-                        # Cabinet body
-                        with ui.element('div').style('display: flex; gap: 4px; background: #2d2d3a; padding: 8px; border-radius: 0 0 8px 8px;'):
-                            # Left column: 3 drawers
-                            with ui.element('div').style('flex: 1; display: flex; flex-direction: column; gap: 4px;'):
-                                for i in range(1, 4):
-                                    with ui.element('div').classes(f'drawer').style('''
-                                        height: 80px; border-radius: 6px;
-                                        background: linear-gradient(135deg, #7ec8e3 0%, #6bb8d3 100%);
-                                        display: flex; align-items: center; justify-content: center;
-                                    '''):
-                                        indicator = ui.element('div').classes('drawer-indicator closed')
-                                        self.drawer_indicators[i] = indicator
-                                        ui.element('div').style('width: 60%; height: 8px; background: #333; border-radius: 4px;')
-                                        ui.label(str(i)).style('position: absolute; bottom: 8px; left: 8px; font-size: 12px; color: rgba(0,0,0,0.3);')
-
-                            # Right column: 1 drawer
-                            with ui.element('div').style('flex: 1; display: flex; flex-direction: column; justify-content: flex-end;'):
-                                with ui.element('div').classes('drawer').style('''
-                                    height: 248px; border-radius: 6px;
-                                    background: linear-gradient(135deg, #d4a5d4 0%, #c495c4 100%);
-                                    display: flex; align-items: center; justify-content: center;
-                                '''):
+                        # Cabinet body with 4 drawers stacked vertically
+                        with ui.element('div').classes('cabinet-body'):
+                            for i in range(4):
+                                with ui.element('div').classes('drawer'):
                                     indicator = ui.element('div').classes('drawer-indicator closed')
-                                    self.drawer_indicators[4] = indicator
-                                    ui.element('div').style('width: 60%; height: 8px; background: #333; border-radius: 4px;')
-                                    ui.label('4').style('position: absolute; bottom: 8px; left: 8px; font-size: 12px; color: rgba(0,0,0,0.3);')
+                                    self.drawer_indicators[i] = indicator
+                                    ui.element('div').classes('drawer-handle')
+                                    ui.label(str(i + 1)).classes('drawer-number')
 
                 # Right Panel: Status Display
                 with ui.element('div').classes('status-panel'):
                     ui.label('Welcome to Save4223').style('''
-                        font-size: 56px; font-weight: 700;
+                        font-size: 42px; font-weight: 700;
                         background: linear-gradient(135deg, #00d9ff 0%, #00ff88 100%);
                         -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-                        margin-bottom: 40px; text-align: center;
+                        margin-bottom: 30px; text-align: center;
                     ''')
 
                     with ui.card().classes('w-full').style('''
-                        max-width: 500px; background: rgba(255,255,255,0.05);
-                        border: 2px solid rgba(255,255,255,0.1); border-radius: 20px;
-                        padding: 40px 60px; text-align: center;
+                        max-width: 450px; background: rgba(255,255,255,0.05);
+                        border: 2px solid rgba(255,255,255,0.1); border-radius: 16px;
+                        padding: 30px 40px; text-align: center;
                     ''') as self.status_card:
-                        self.status_icon = ui.label('💳').style('font-size: 64px; margin-bottom: 20px;')
-                        self.status_label = ui.label('Tap your card to access the cabinet').style('font-size: 24px; color: #e0e0e0;')
+                        self.status_icon = ui.label('💳').style('font-size: 48px; margin-bottom: 15px;')
+                        self.status_label = ui.label('Tap your card to access the cabinet').style('font-size: 20px; color: #e0e0e0; line-height: 1.4;')
 
-                        # Scanning animation (hidden by default)
-                        with ui.row().classes('scanning-dots hidden').style('margin-top: 20px;') as self.scanning_container:
+                        # Scanning animation
+                        with ui.row().classes('scanning-dots hidden').style('') as self.scanning_container:
                             ui.element('div').classes('scanning-dot')
                             ui.element('div').classes('scanning-dot')
                             ui.element('div').classes('scanning-dot')
 
-                        # Warning details (hidden by default)
+                        # Warning label
                         self.warning_label = ui.label('').style('''
-                            margin-top: 15px; padding: 15px;
-                            background: rgba(255,71,87,0.1); border-radius: 8px;
-                            color: #ff6b6b; display: none;
+                            margin-top: 12px; padding: 10px;
+                            background: rgba(255,71,87,0.1); border-radius: 6px;
+                            color: #ff6b6b; font-size: 14px;
                         ''')
+                        self.warning_label.classes('hidden')
 
-                    # User info (hidden by default)
-                    with ui.card().style('margin-top: 30px; padding: 20px 30px; background: rgba(0,217,255,0.1); border-radius: 12px; border: 1px solid rgba(0,217,255,0.3); display: none;') as self.user_card:
-                        self.user_name_label = ui.label('').style('font-size: 28px; font-weight: 600; color: #00d9ff;')
+                    # User info
+                    with ui.card().style('margin-top: 20px; padding: 15px 25px; background: rgba(0,217,255,0.1); border-radius: 10px; border: 1px solid rgba(0,217,255,0.3); display: none;') as self.user_card:
+                        self.user_name_label = ui.label('').style('font-size: 22px; font-weight: 600; color: #00d9ff;')
 
-                    # Transaction summary (hidden by default)
-                    with ui.column().style('margin-top: 30px; display: none;') as self.summary_container:
-                        with ui.column().style('margin-bottom: 20px;') as self.borrowed_section:
-                            ui.label('📤 Borrowed').style('font-size: 16px; font-weight: 600; color: #ff6b6b; margin-bottom: 10px;')
+                    # Transaction summary
+                    with ui.column().style('margin-top: 20px; display: none; text-align: left;') as self.summary_container:
+                        with ui.column().style('margin-bottom: 12px;') as self.borrowed_section:
+                            ui.label('📤 Borrowed').style('font-size: 14px; font-weight: 600; color: #ff6b6b; margin-bottom: 6px;')
                             self.borrowed_list = ui.column()
 
                         with ui.column() as self.returned_section:
-                            ui.label('📥 Returned').style('font-size: 16px; font-weight: 600; color: #51cf66; margin-bottom: 10px;')
+                            ui.label('📥 Returned').style('font-size: 14px; font-weight: 600; color: #51cf66; margin-bottom: 6px;')
                             self.returned_list = ui.column()
 
-            # Auto-refresh timer
-            ui.timer(5.0, self._update_ui)
-
-            # Poll message queue
+            # Timer to poll message queue
             ui.timer(0.1, self._process_message_queue)
+
+            # Timer to poll hardware (drawer states)
+            if self.hardware:
+                ui.timer(0.2, self._poll_drawer_states)
 
             def on_disconnect():
                 self.clients.discard(client_id)
             ui.context.client.on_disconnect(on_disconnect)
 
-    def _update_ui(self):
-        """Periodic UI update."""
-        pass
+    def _poll_drawer_states(self):
+        """Poll hardware for drawer states."""
+        if not self.hardware or not self._poll_hardware:
+            return
 
-    def update_drawer_states(self, states: Dict[int, bool]):
+        try:
+            from hardware.base import DrawerState
+            new_states = {}
+            for i in range(4):
+                state = self.hardware.get_drawer_state(i)
+                new_states[i] = (state == DrawerState.OPEN)
+
+            if new_states != self.drawer_states:
+                self.update_drawer_indicators(new_states)
+        except Exception as e:
+            logger.debug(f"Error polling drawer states: {e}")
+
+    def update_drawer_indicators(self, states: Dict[int, bool]):
         """Update drawer indicator states.
 
         Args:
-            states: Dict mapping drawer number (1-4) to open state (True=open, False=closed)
+            states: Dict mapping drawer index (0-3) to open state (True=open, False=closed)
         """
         self.drawer_states = states
-        for drawer_num, is_open in states.items():
-            if drawer_num in self.drawer_indicators:
-                indicator = self.drawer_indicators[drawer_num]
+        for drawer_idx, is_open in states.items():
+            if drawer_idx in self.drawer_indicators:
+                indicator = self.drawer_indicators[drawer_idx]
                 if is_open:
                     indicator.classes('drawer-indicator open', remove='closed')
                 else:
@@ -271,10 +319,10 @@ class CabinetDisplayGUI:
         return any(self.drawer_states.values())
 
     def get_open_drawers(self) -> List[int]:
-        """Get list of open drawer numbers."""
-        return [num for num, is_open in self.drawer_states.items() if is_open]
+        """Get list of open drawer indices."""
+        return [idx for idx, is_open in self.drawer_states.items() if is_open]
 
-    def set_state(self, state: DisplayState, message: str = "", data: Dict = None):
+    def set_state(self, state: DisplayState, message: str = "", data: Optional[Dict] = None):
         """Set display state.
 
         Args:
@@ -289,15 +337,26 @@ class CabinetDisplayGUI:
         self.user_card.style('display: none;')
         self.summary_container.style('display: none;')
         self.scanning_container.classes('hidden', remove='')
-        self.warning_label.style('display: none;')
+        self.warning_label.classes('hidden', remove='')
         self.status_card.classes(remove='success warning processing')
+
+        # Reset card border style
+        self.status_card.style('''
+            max-width: 450px; background: rgba(255,255,255,0.05);
+            border: 2px solid rgba(255,255,255,0.1); border-radius: 16px;
+            padding: 30px 40px; text-align: center;
+        ''')
 
         if state == DisplayState.IDLE:
             self.status_icon.set_text('💳')
             self.status_label.set_text(message or "Tap your card to access the cabinet")
 
         elif state == DisplayState.LOGIN_SUCCESS:
-            self.status_card.classes('success')
+            self.status_card.style('''
+                max-width: 450px; background: rgba(255,255,255,0.05);
+                border: 2px solid #00ff88; border-radius: 16px;
+                padding: 30px 40px; text-align: center; box-shadow: 0 0 20px rgba(0,255,136,0.2);
+            ''')
             self.status_icon.set_text('✅')
             self.status_label.set_text(message or "Login successful, you may now open the cabinet")
             if data.get('user'):
@@ -306,22 +365,35 @@ class CabinetDisplayGUI:
                 self.user_card.style('display: block;')
 
         elif state == DisplayState.CHECKOUT_WARNING:
-            self.status_card.classes('warning')
+            self.status_card.style('''
+                max-width: 450px; background: rgba(255,255,255,0.05);
+                border: 2px solid #ff4757; border-radius: 16px;
+                padding: 30px 40px; text-align: center; box-shadow: 0 0 20px rgba(255,71,87,0.2);
+            ''')
             self.status_icon.set_text('⚠️')
             self.status_label.set_text(message or "Please close all drawers to complete checkout")
             open_drawers = self.get_open_drawers()
             if open_drawers:
-                self.warning_label.set_text(f"Open drawers: {', '.join(map(str, open_drawers))}")
-                self.warning_label.style('display: block;')
+                drawer_nums = [str(d + 1) for d in open_drawers]  # 1-indexed for display
+                self.warning_label.set_text(f"Open drawers: {', '.join(drawer_nums)}")
+                self.warning_label.classes(remove='hidden')
 
         elif state == DisplayState.RFID_SCANNING:
-            self.status_card.classes('processing')
+            self.status_card.style('''
+                max-width: 450px; background: rgba(255,255,255,0.05);
+                border: 2px solid #ffd700; border-radius: 16px;
+                padding: 30px 40px; text-align: center; box-shadow: 0 0 20px rgba(255,215,0,0.2);
+            ''')
             self.status_icon.set_text('📡')
             self.status_label.set_text(message or "RFID Scanning in progress")
             self.scanning_container.classes(remove='hidden')
 
         elif state == DisplayState.SESSION_SUMMARY:
-            self.status_card.classes('success')
+            self.status_card.style('''
+                max-width: 450px; background: rgba(255,255,255,0.05);
+                border: 2px solid #00ff88; border-radius: 16px;
+                padding: 30px 40px; text-align: center; box-shadow: 0 0 20px rgba(0,255,136,0.2);
+            ''')
             self.status_icon.set_text('✓')
             self.status_label.set_text(message or "Session complete!")
 
@@ -337,7 +409,11 @@ class CabinetDisplayGUI:
                 self.summary_container.style('display: flex;')
 
         elif state == DisplayState.ERROR:
-            self.status_card.classes('warning')
+            self.status_card.style('''
+                max-width: 450px; background: rgba(255,255,255,0.05);
+                border: 2px solid #ff4757; border-radius: 16px;
+                padding: 30px 40px; text-align: center; box-shadow: 0 0 20px rgba(255,71,87,0.2);
+            ''')
             self.status_icon.set_text('❌')
             self.status_label.set_text(message or "An error occurred")
 
@@ -349,9 +425,9 @@ class CabinetDisplayGUI:
             if borrowed:
                 self.borrowed_section.style('display: block;')
                 for item in borrowed:
-                    with ui.row().style('padding: 10px 15px; background: rgba(255,255,255,0.05); border-radius: 8px; margin-bottom: 8px;'):
-                        ui.label('📤').style('font-size: 20px;')
-                        ui.label(item.get('name', item.get('rfid', 'Unknown'))).style('font-size: 16px;')
+                    with ui.row().style('padding: 6px 10px; background: rgba(255,255,255,0.05); border-radius: 6px; margin-bottom: 4px; align-items: center;'):
+                        ui.label('📤').style('font-size: 14px;')
+                        ui.label(item.get('name', item.get('rfid', 'Unknown'))).style('font-size: 13px;')
             else:
                 self.borrowed_section.style('display: none;')
 
@@ -361,9 +437,9 @@ class CabinetDisplayGUI:
             if returned:
                 self.returned_section.style('display: block;')
                 for item in returned:
-                    with ui.row().style('padding: 10px 15px; background: rgba(255,255,255,0.05); border-radius: 8px; margin-bottom: 8px;'):
-                        ui.label('📥').style('font-size: 20px;')
-                        ui.label(item.get('name', item.get('rfid', 'Unknown'))).style('font-size: 16px;')
+                    with ui.row().style('padding: 6px 10px; background: rgba(255,255,255,0.05); border-radius: 6px; margin-bottom: 4px; align-items: center;'):
+                        ui.label('📥').style('font-size: 14px;')
+                        ui.label(item.get('name', item.get('rfid', 'Unknown'))).style('font-size: 13px;')
             else:
                 self.returned_section.style('display: none;')
 
@@ -380,7 +456,7 @@ class CabinetDisplayGUI:
             self.set_state(state, message.get("message", ""))
 
         elif msg_type == "DRAWER_STATES":
-            self.update_drawer_states(message.get("states", {}))
+            self.update_drawer_indicators(message.get("states", {}))
 
         elif msg_type == "AUTH_SUCCESS":
             self.current_user = message.get("user", {})
@@ -397,17 +473,17 @@ class CabinetDisplayGUI:
                 self.set_state(DisplayState.RFID_SCANNING)
 
         elif msg_type == "SESSION_SUMMARY":
-            self.session_summary = {
-                "borrowed": message.get("borrowed", []),
-                "returned": message.get("returned", [])
-            }
+            borrowed = message.get("borrowed", [])
+            returned = message.get("returned", [])
+            user_name = message.get("user_name", "User")
+
+            self.session_summary = {"borrowed": borrowed, "returned": returned}
             self.set_state(
                 DisplayState.SESSION_SUMMARY,
-                user_name=message.get("user_name"),
                 data={
-                    "user": {"name": message.get("user_name", "User")},
-                    "borrowed": self.session_summary["borrowed"],
-                    "returned": self.session_summary["returned"]
+                    "user": {"name": user_name},
+                    "borrowed": borrowed,
+                    "returned": returned
                 }
             )
 
@@ -429,7 +505,6 @@ class CabinetDisplayGUI:
 
         if self.fullscreen:
             import subprocess
-            import time
             import threading
 
             def open_kiosk():
@@ -481,17 +556,18 @@ class CabinetDisplayGUI:
 class DisplayThread:
     """Thread wrapper for NiceGUI display."""
 
-    def __init__(self, width: int = 800, height: int = 480, fullscreen: bool = True):
+    def __init__(self, width: int = 800, height: int = 480, fullscreen: bool = True,
+                 hardware=None):
         self.display = CabinetDisplayGUI(
             host="0.0.0.0",
             port=8080,
-            fullscreen=fullscreen
+            fullscreen=fullscreen,
+            hardware=hardware
         )
         self._thread = None
 
     def start(self):
         """Start display server in background thread."""
-        import threading
         self._thread = threading.Thread(target=self.display._run_server, daemon=True)
         self._thread.start()
 
@@ -534,61 +610,57 @@ class DisplayThread:
         })
 
 
+# Standalone test with real hardware
 if __name__ == "__main__":
-    import sys
-    import time
-    import threading
-
     logging.basicConfig(level=logging.INFO)
 
-    sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
+    # Try to import real hardware
+    try:
+        sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
+        from hardware import RaspberryPiHardware
+        hw = RaspberryPiHardware()
+        hw.initialize()
+        print("Using RaspberryPiHardware")
+    except Exception as e:
+        print(f"Hardware not available: {e}")
+        hw = None
 
-    display = CabinetDisplayGUI(fullscreen=False)
+    display = CabinetDisplayGUI(fullscreen=False, hardware=hw)
 
-    def demo_loop():
-        """Demo loop showing all states."""
-        time.sleep(3)
+    if hw:
+        def demo_loop():
+            """Demo loop with real hardware."""
+            time.sleep(3)
 
-        # Login success
-        display._message_queue.put({
-            "type": "AUTH_SUCCESS",
-            "user": {"name": "Demo User"}
-        })
-        time.sleep(3)
+            # Login success
+            display._message_queue.put({
+                "type": "AUTH_SUCCESS",
+                "user": {"name": "Demo User"}
+            })
+            time.sleep(5)
 
-        # Open some drawers
-        display._message_queue.put({
-            "type": "DRAWER_STATES",
-            "states": {1: True, 2: False, 3: True, 4: False}
-        })
-        time.sleep(2)
+            # Try checkout (will check real drawer states)
+            display._message_queue.put({"type": "CHECKOUT_ATTEMPT"})
 
-        # Try checkout with open drawers
-        display._message_queue.put({"type": "CHECKOUT_ATTEMPT"})
-        time.sleep(3)
+            # Wait for user to close drawers or continue
+            time.sleep(10)
 
-        # Close drawers and scan
-        display._message_queue.put({
-            "type": "DRAWER_STATES",
-            "states": {1: False, 2: False, 3: False, 4: False}
-        })
-        display._message_queue.put({"type": "STATE_CHANGE", "state": "RFID_SCANNING"})
-        time.sleep(3)
+            # Simulate scanning
+            display._message_queue.put({"type": "STATE_CHANGE", "state": "RFID_SCANNING"})
+            time.sleep(3)
 
-        # Show summary
-        display._message_queue.put({
-            "type": "SESSION_SUMMARY",
-            "user_name": "Demo User",
-            "borrowed": [{"name": "Arduino Uno", "rfid": "RFID-001"}],
-            "returned": [{"name": "Multimeter", "rfid": "RFID-003"}]
-        })
-        time.sleep(5)
+            # Show summary
+            display._message_queue.put({
+                "type": "SESSION_SUMMARY",
+                "user_name": "Demo User",
+                "borrowed": [{"name": "Arduino Uno", "rfid": "RFID-001"}],
+                "returned": [{"name": "Multimeter", "rfid": "RFID-003"}]
+            })
+            time.sleep(5)
 
-        # Back to idle
-        display._message_queue.put({
-            "type": "STATE_CHANGE",
-            "state": "IDLE"
-        })
+            # Back to idle
+            display._message_queue.put({"type": "STATE_CHANGE", "state": "IDLE"})
 
-    threading.Thread(target=demo_loop, daemon=True).start()
+        threading.Thread(target=demo_loop, daemon=True).start()
+
     display.run()
