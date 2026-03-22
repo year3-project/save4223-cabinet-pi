@@ -177,13 +177,13 @@ class CabinetDisplayGUI:
             # Auto-refresh stats
             ui.timer(5.0, self._update_stats_ui)
 
+            # Poll message queue for updates from main thread
+            ui.timer(0.1, self._process_message_queue)
+
             # Cleanup on disconnect
             def on_disconnect():
                 self.clients.discard(client_id)
             ui.context.client.on_disconnect(on_disconnect)
-
-        # Background task: drain message queue on NiceGUI's event loop
-        ui.timer(0.1, self._process_message_queue)
 
     def _update_stats_ui(self):
         """Update stats display."""
