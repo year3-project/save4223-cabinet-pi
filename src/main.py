@@ -70,6 +70,7 @@ class SmartCabinet:
         self.current_card_uid: Optional[str] = None
         self.session_id: Optional[str] = None
         self.session_start_time: Optional[datetime] = None
+        self._pairing_token: Optional[str] = None  # For QR-first pairing flow
 
         # Initialize components
         logger.info("Initializing Smart Cabinet...")
@@ -636,6 +637,92 @@ class SmartCabinet:
             'message': 'Pairing mode active. Tap unpaired card to begin.'
         })
 
+    def _enter_pairing_mode(self, token: str):
+        """
+        Enter pairing mode from QR scan (QR-first flow).
+
+        Flow:
+        1. QR scanned in locked state -> enter pairing mode
+        2. Wait for NFC card tap (10s timeout)
+        3. Complete pairing via API
+
+        Args:
+            token: Pairing token extracted from QR code
+        """
+        logger.info(f"Entering pairing mode with token: {token}")
+        self._pairing_token = token
+
+        self._send_to_display({
+            'type': 'PAIRING_MODE',
+            'message': 'Pairing mode: Tap NFC card to complete pairing (10s timeout)'
+        })
+        self.hardware.set_all_leds('yellow')
+
+        # Wait for NFC card tap (10 second timeout)
+        start_time = time.time()
+        card_uid = None
+
+        while time.time() - start_time < 10:
+            card = self.hardware.read_nfc(timeout=0.5)
+            if card:
+                card_uid = card
+                break
+            time.sleep(0.1)
+
+        if not card_uid:
+            logger.info("Pairing timeout - no card detected")
+            self._send_to_display({
+                'type': 'PAIRING_FAILURE',
+                'error': 'Timeout - no card detected',
+                'code': 'TIMEOUT'
+            })
+            self.hardware.beep_error()
+            time.sleep(2)
+            self._send_to_display({
+                'type': 'STATE_CHANGE',
+                'state': 'IDLE',
+                'message': 'Tap card or scan QR code to open'
+            })
+            return
+
+        logger.info(f"Card detected for pairing: {card_uid[:10]}...")
+
+        # Complete pairing via API
+        result = self.pairing_handler.pair_with_qr(
+            qr_content=token,
+            card_uid=card_uid,
+            cabinet_id=CONFIG['cabinet_id']
+        )
+
+        if result.success:
+            logger.info(f"Pairing successful: {result.message}")
+            self.hardware.set_all_leds('green')
+            self.hardware.beep_success()
+            self._send_to_display({
+                'type': 'PAIRING_SUCCESS',
+                'message': result.message,
+                'user_id': result.user_id
+            })
+            time.sleep(3)
+        else:
+            logger.warning(f"Pairing failed: {result.message}")
+            self.hardware.set_all_leds('red')
+            self.hardware.beep_error()
+            self._send_to_display({
+                'type': 'PAIRING_FAILURE',
+                'error': result.message,
+                'code': result.error_code
+            })
+            time.sleep(3)
+
+        # Return to idle
+        self._send_to_display({
+            'type': 'STATE_CHANGE',
+            'state': 'IDLE',
+            'message': 'Tap card or scan QR code to open'
+        })
+        self._pairing_token = None
+
     # =================================================================================
     # RFID Scanning
     # =================================================================================
@@ -697,10 +784,19 @@ class SmartCabinet:
             self.cleanup()
 
     def _handle_locked(self):
-        """Poll for NFC in LOCKED state."""
+        """Poll for NFC or QR in LOCKED state."""
         # Skip if hardware not initialized yet
         if not getattr(self.hardware, '_initialized', False):
             return
+
+        # Check for QR code first (pairing mode)
+        qr = self.hardware.read_qr(timeout=0.1)
+        if qr:
+            token = self.pairing_handler.extract_token_from_qr(qr)
+            if token:
+                logger.info(f"Pairing QR detected: {token}")
+                self._enter_pairing_mode(token)
+                return
 
         card = self.hardware.read_nfc(timeout=0.5)
         if card:
