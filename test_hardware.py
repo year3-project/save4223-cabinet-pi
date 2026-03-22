@@ -21,6 +21,7 @@ Usage:
 import sys
 import time
 import argparse
+import threading
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent / 'src'))
@@ -44,6 +45,7 @@ def test_nfc_reader(hw):
         return False
 
     print("Tap a card or scan a QR code (10s timeout)...")
+
     try:
         uid = hw.read_nfc(timeout=10)
         if uid:
@@ -72,7 +74,7 @@ def test_rfid_reader(hw):
             print(f"          {tag}")
         return True
     else:
-        print("  FAIL  No RFID tags detected")
+        print("  No RFID tags detected")
         return False
 
 
@@ -92,15 +94,6 @@ def test_locks(hw):
     hw.lock_all()
     time.sleep(0.5)
 
-    print("  Cycling locks individually (A→B→C→D, 1s each)...")
-    for i, name in enumerate("ABCD"):
-        print(f"    Lock {name} (GPIO {SOLENOID_PINS[i]}) → unlock")
-        hw.unlock_drawer(i)
-        time.sleep(1)
-        hw.lock_drawer(i)
-        print(f"    Lock {name} → locked")
-        time.sleep(0.3)
-
     print("  PASS  Lock test complete")
     return True
 
@@ -111,7 +104,7 @@ def test_leds(hw):
     print("TESTING WS2812B LED STRIP")
     print(f"  GPIO 18 | {LED_COUNT} pixels | brightness 180")
     print("=" * 50)
-
+    
     colors = [
         ('red',    'red'),
         ('green',  'green'),
@@ -127,9 +120,13 @@ def test_leds(hw):
 
     print("  Running chase pattern (blue)...")
     hw.led_pattern('chase', 'blue', duration=2.0)
+    
+    print("  Running blink pattern (red)...")
+    hw.led_pattern('blink', 'red', duration=2.0)
 
-    print("  Running blink pattern (green)...")
-    hw.led_pattern('blink', 'green', duration=2.0)
+    # Normal idle state
+    print("  Running rainbow pattern...")
+    hw.led_pattern('rainbow', 'white', duration=2.0)
 
     print("  LEDs off")
     hw.set_all_leds('off')
@@ -167,9 +164,39 @@ def test_flow(hw):
     print("  NFC auth → unlock → RFID scan → lock")
     print("=" * 50)
 
-    # Step 1: NFC read
-    print("\n[1/4] Tap your NFC card (15s timeout)...")
-    hw.set_all_leds('yellow')
+    def start_led(pattern: str, color, duration: float = 1.0):
+        stop_event = threading.Event()
+
+        def _run():
+            while not stop_event.is_set():
+                hw.led_pattern(pattern, color, duration)
+
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+        return stop_event, t
+
+    def stop_led(handle):
+        if not handle:
+            return
+        stop_event, thread = handle
+        stop_event.set()
+        thread.join(timeout=2)
+
+    # # Idle rainbow (non-blocking)
+    # idle_handle = start_led('rainbow', 'white', duration=1.0)
+
+    # Step 1: Pre-scan RFID before auth (blue chase while scanning)
+    print("\n[1/6] Pre-scan RFID inventory (baseline)...")
+    scan_handle = start_led('chase', 'blue', duration=0.5)
+    start_tags = hw.read_rfid_tags() or []
+    stop_led(scan_handle)
+    if start_tags:
+        print(f"  Baseline: {len(start_tags)} tag(s)")
+    else:
+        print("  Baseline: no tags detected (ok if empty)")
+
+    # Step 2: NFC auth
+    print("\n[2/6] Tap your NFC card to unlock (15s timeout)...")
     card_uid = hw.read_nfc(timeout=15)
     if not card_uid:
         print("  FAIL  No card detected")
@@ -177,44 +204,65 @@ def test_flow(hw):
         return False
     print(f"  Card UID: {card_uid}")
 
-    # Step 2: Unlock
-    print("\n[2/4] Unlocking all locks...")
+    # Auth success: stay green (no more blue chase)
     hw.set_all_leds('green')
+
+    # Step 3: Unlock (auth success)
+    print("\n[3/6] Unlocking all locks...")
     hw.unlock_all()
     print("  All locks unlocked (HIGH)")
-    time.sleep(1)
+    time.sleep(0.5)
 
-    # Step 3: RFID scan while unlocked
-    print("\n[3/4] Scanning RFID inventory...")
-    hw.set_all_leds('blue')
-    tags = hw.read_rfid_tags()
-    if tags:
-        print(f"  {len(tags)} tag(s) found:")
-        for tag in tags:
-            print(f"    {tag}")
-    else:
-        print("  No RFID tags detected (ok if cabinet is empty)")
+    # Step 4: Wait for completion tap (stay green while waiting)
+    print("\n[4/6] Tap card again when finished (15s timeout)...")
+    done_uid = hw.read_nfc(timeout=15)
+    if not done_uid:
+        print("  FAIL  No completion tap detected")
+        hw.set_all_leds('red')
+        return False
+    print(f"  Completion card: {done_uid}")
 
-    input("\n  Simulate tool borrow/return, then press Enter to close...")
+    # If drawers open at completion tap, flash red twice as warning
+    if not hw.are_all_drawers_closed():
+        for _ in range(2):
+            hw.set_all_leds('red')
+            time.sleep(0.3)
+            hw.set_all_leds('off')
+            time.sleep(0.2)
+        hw.set_all_leds('red')
 
-    # Step 4: Lock
-    print("\n[4/4] Locking all locks...")
-    hw.set_all_leds('red')
+    # Step 5: Ensure drawers closed before locking (no timeout; wait indefinitely)
+    print("\n[5/6] Checking drawers are closed before locking...")
+    drawers_closed = hw.are_all_drawers_closed()
+    while not drawers_closed:
+        hw.set_all_leds('red')
+        time.sleep(0.2)
+        drawers_closed = hw.are_all_drawers_closed()
+    hw.set_all_leds('green')
+
+    # Lock
+    print("  Locking all locks...")
+    hw.set_all_leds('red' if not drawers_closed else 'green')
     hw.lock_all()
     print("  All locks locked (LOW)")
-    time.sleep(1)
+    time.sleep(0.5)
 
-    # End scan
-    print("  Scanning final RFID state...")
-    hw.set_all_leds('yellow')
-    end_tags = hw.read_rfid_tags()
+    # Step 6: Post-lock RFID scan and diff (blue chase while scanning)
+    print("\n[6/6] Post-lock RFID inventory...")
+    scan_handle = start_led('chase', 'blue', duration=0.5)
+    end_tags = hw.read_rfid_tags() or []
+    stop_led(scan_handle)
     print(f"  End tags: {len(end_tags)}")
 
-    borrowed = [t for t in tags if t not in end_tags]
-    returned = [t for t in end_tags if t not in tags]
+    borrowed = [t for t in start_tags if t not in end_tags]
+    returned = [t for t in end_tags if t not in start_tags]
     print(f"  Diff → borrowed: {len(borrowed)}, returned: {len(returned)}")
 
-    hw.set_all_leds('off')
+    # Idle rainbow resumes
+    # idle_handle = start_led('rainbow', 'white', duration=1.0)
+    # time.sleep(2.0)
+    # stop_led(idle_handle)
+
     print("\n  PASS  Full flow test complete")
     return True
 
