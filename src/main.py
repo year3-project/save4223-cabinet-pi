@@ -661,20 +661,13 @@ class SmartCabinet:
         # Wait for NFC card tap (10 second timeout)
         start_time = time.time()
         card_uid = None
-        card_attempts = []
 
         while time.time() - start_time < 10:
             card = self.hardware.read_nfc(timeout=0.5)
-            if card and len(card) >= 4:  # Validate card UID length (at least 4 chars)
-                card_attempts.append(card)
-                # If we get the same card twice, accept it
-                if len(card_attempts) >= 2 and card_attempts[-1] == card_attempts[-2]:
-                    card_uid = card
-                    break
-                # Or accept immediately if looks like a valid card (numeric/string)
-                if len(card) >= 8:
-                    card_uid = card
-                    break
+            # Accept any non-empty card reading (HID reader handles validation)
+            if card and len(card.strip()) >= 1:
+                card_uid = card.strip()
+                break
             time.sleep(0.1)
 
         if not card_uid:

@@ -46,14 +46,22 @@ class PairingHandler:
 
     def _clean_hid_input(self, content: str) -> str:
         """Clean HID keyboard input by removing common noise patterns."""
+        if not content:
+            return ""
         # Remove common HID reader suffixes/prefixes
-        noise_patterns = ['MK', 'MOMKM', 'MJ', 'MO']
+        noise_patterns = ['MK', 'MOMKM', 'MJ', 'MO', 'KM']
         cleaned = content.strip().upper()
-        for pattern in noise_patterns:
-            if cleaned.endswith(pattern):
-                cleaned = cleaned[:-len(pattern)]
-            if cleaned.startswith(pattern):
-                cleaned = cleaned[len(pattern):]
+        # Keep removing until no more patterns found
+        changed = True
+        while changed:
+            changed = False
+            for pattern in noise_patterns:
+                if cleaned.endswith(pattern):
+                    cleaned = cleaned[:-len(pattern)]
+                    changed = True
+                if cleaned.startswith(pattern):
+                    cleaned = cleaned[len(pattern):]
+                    changed = True
         return cleaned
 
     def extract_token_from_qr(self, qr_content: str) -> Optional[str]:
