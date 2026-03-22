@@ -357,8 +357,8 @@ class SmartCabinet:
 
         # Capture start snapshot (RFID tags present when unlocked)
         logger.info("Capturing start RFID snapshot...")
-        # Use voting method for better accuracy (5 cycles, need 2+ appearances)
-        start_tags = self.hardware.read_rfid_tags_voting(total_cycles=5, min_appearances=2)
+        # Use voting method for better accuracy (10 cycles, need 3+ appearances)
+        start_tags = self.hardware.read_rfid_tags_voting()
         logger.info(f"Start tags: {start_tags}")
         self.inventory.capture_start_snapshot(start_tags)
 
@@ -735,8 +735,8 @@ class SmartCabinet:
         to be considered present. This reduces false positives from
         sporadic reads.
         """
-        logger.info("Starting RFID voting scan (5 cycles, need 2+ appearances)")
-        result = self.hardware.read_rfid_tags_voting(total_cycles=5, min_appearances=2)
+        logger.info("Starting RFID voting scan (10 cycles, need 3+ appearances)")
+        result = self.hardware.read_rfid_tags_voting()
         logger.info(f"RFID voting scan complete: {len(result)} confirmed tags")
         return result
 

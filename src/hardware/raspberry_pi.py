@@ -43,8 +43,8 @@ LED_CHANNEL = 0      # set to '1' for GPIOs 13, 19, 41, 45 or 53
 # RFID configuration
 RFID_HOST = '192.168.0.178'
 RFID_PORT = 4001
-RFID_READ_CYCLES = 5
-RFID_READ_INTERVAL = 0.5
+RFID_READ_CYCLES = 10
+RFID_READ_INTERVAL = 0.8
 RFID_ADDRESS = 0xFF
 IGNORED_TAGS = {"00B07A15306008EFF68E8F54"}
 
@@ -262,7 +262,7 @@ class RFIDReader:
             self.stop_reading()
             self.disconnect()
 
-    def read_rfid_tags_voting(self, total_cycles: int = 5, min_appearances: int = 2) -> List[str]:
+    def read_rfid_tags_voting(self, total_cycles: int = 10, min_appearances: int = 3) -> List[str]:
         """
         Read RFID tags with voting mechanism for better accuracy.
 
@@ -587,7 +587,7 @@ class RaspberryPiHardware(HardwareInterface):
 
         return self._rfid_reader.read_rfid_tags_multiple()
 
-    def read_rfid_tags_voting(self, total_cycles: int = 5, min_appearances: int = 2) -> List[str]:
+    def read_rfid_tags_voting(self, total_cycles: int = 10, min_appearances: int = 3) -> List[str]:
         """
         Read RFID tags with voting mechanism for better accuracy.
 

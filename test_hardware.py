@@ -64,12 +64,12 @@ def test_rfid_reader(hw):
     print("\n" + "=" * 50)
     print("TESTING RFID READER (VOTING MODE)")
     print(f"  Host: {RFID_HOST}:{RFID_PORT}")
-    print(f"  Config: 5 cycles, need 2+ appearances to confirm")
+    print(f"  Config: 10 cycles, need 3+ appearances to confirm")
     print("=" * 50)
     print("Place RFID tags near the antennas...")
 
-    # Use voting method for better accuracy
-    tags = hw.read_rfid_tags_voting(total_cycles=5, min_appearances=2)
+    # Use voting method for better accuracy (10 cycles, need 3+ appearances)
+    tags = hw.read_rfid_tags_voting()
 
     if tags:
         print(f"  PASS  {len(tags)} confirmed tag(s):")
