@@ -92,6 +92,14 @@ class PairingHandler:
             except json.JSONDecodeError:
                 pass
 
+        # Try to find token embedded in longer string (e.g., HID keyboard input)
+        # Search for 8-character alphanumeric sequence
+        import re
+        matches = re.findall(r'[A-Z0-9]{8}', qr_content.upper())
+        for match in matches:
+            if self.QR_TOKEN_PATTERN.match(match):
+                return match
+
         return None
 
     def pair_with_qr(self, qr_content: str, card_uid: str,

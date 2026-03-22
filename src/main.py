@@ -800,6 +800,13 @@ class SmartCabinet:
 
         card = self.hardware.read_nfc(timeout=0.5)
         if card:
+            # Check if this is actually a QR code (pairing token) scanned as NFC
+            token = self.pairing_handler.extract_token_from_qr(card)
+            if token:
+                logger.info(f"Pairing token detected via NFC reader: {token}")
+                self._enter_pairing_mode(token)
+                return
+
             logger.info(f"Card detected: {card[:10]}...")
             self.current_card_uid = card  # Save so _on_authenticating doesn't re-read
             self.state_machine.transition(SystemState.AUTHENTICATING)
