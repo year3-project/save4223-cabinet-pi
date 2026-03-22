@@ -262,6 +262,74 @@ class RFIDReader:
             self.stop_reading()
             self.disconnect()
 
+    def read_rfid_tags_voting(self, total_cycles: int = 5, min_appearances: int = 2) -> List[str]:
+        """
+        Read RFID tags with voting mechanism for better accuracy.
+
+        A tag is considered present only if it appears in at least min_appearances
+        out of total_cycles scans. This reduces false positives from sporadic reads.
+
+        Args:
+            total_cycles: Total number of scan cycles (default 5)
+            min_appearances: Minimum times a tag must appear to be considered present (default 2)
+
+        Returns:
+            List of tags that passed the voting threshold
+        """
+        from collections import Counter
+
+        if not self.connect():
+            return []
+
+        tag_counter = Counter()
+        cycle = 0
+        self.reading = True
+
+        logger.info(f"Starting RFID voting scan - {total_cycles} cycles, need {min_appearances} appearances")
+
+        try:
+            session = 0x01
+            target = 0x00
+            repeat = 0x01
+            cmd_payload = bytes([session, target, repeat])
+
+            while self.reading and cycle < total_cycles:
+                # Clear tags for this cycle to get fresh detection
+                cycle_tags = set()
+                self.work_mode_tags.clear()
+
+                packet = self._build_packet(0x8B, cmd_payload)
+                if self.socket:
+                    self.socket.sendall(packet)
+
+                # Receive for this cycle
+                self._receive_and_process()
+                cycle_tags = set(self.work_mode_tags)
+
+                # Count each tag found in this cycle
+                for tag in cycle_tags:
+                    tag_counter[tag] += 1
+
+                logger.debug(f"[Cycle {cycle+1}/{total_cycles}] Found: {list(cycle_tags)}")
+                cycle += 1
+                time.sleep(RFID_READ_INTERVAL)
+
+            # Apply voting threshold - tag must appear at least min_appearances times
+            confirmed_tags = [tag for tag, count in tag_counter.items() if count >= min_appearances]
+
+            logger.info(f"RFID voting completed: {len(confirmed_tags)} confirmed tags (from {len(tag_counter)} unique)")
+            logger.info(f"Tag appearances: {dict(tag_counter)}")
+            logger.info(f"Confirmed tags: {confirmed_tags}")
+
+            return confirmed_tags
+
+        except Exception as e:
+            logger.error(f"RFID voting read error: {e}")
+            return []
+        finally:
+            self.stop_reading()
+            self.disconnect()
+
     def _receive_and_process(self):
         """Receive and process RFID data."""
         start_time = time.time()
@@ -518,6 +586,25 @@ class RaspberryPiHardware(HardwareInterface):
             return []
 
         return self._rfid_reader.read_rfid_tags_multiple()
+
+    def read_rfid_tags_voting(self, total_cycles: int = 5, min_appearances: int = 2) -> List[str]:
+        """
+        Read RFID tags with voting mechanism for better accuracy.
+
+        A tag is considered present only if it appears in at least min_appearances
+        out of total_cycles scans. This reduces false positives from sporadic reads.
+
+        Args:
+            total_cycles: Total number of scan cycles (default 5)
+            min_appearances: Minimum times a tag must appear to be considered present (default 2)
+
+        Returns:
+            List of tags that passed the voting threshold
+        """
+        if not self._rfid_reader:
+            return []
+
+        return self._rfid_reader.read_rfid_tags_voting(total_cycles, min_appearances)
 
     def unlock_drawer(self, drawer_id: int) -> bool:
         """Unlock a specific solenoid."""

@@ -60,21 +60,19 @@ def test_nfc_reader(hw):
 
 
 def test_rfid_reader(hw):
-    """Test RFID reader (TCP socket) with detailed cycle output."""
+    """Test RFID reader (TCP socket) with voting mechanism."""
     print("\n" + "=" * 50)
-    print("TESTING RFID READER")
+    print("TESTING RFID READER (VOTING MODE)")
     print(f"  Host: {RFID_HOST}:{RFID_PORT}")
+    print(f"  Config: 5 cycles, need 2+ appearances to confirm")
     print("=" * 50)
     print("Place RFID tags near the antennas...")
 
-    # Use internal reader directly to see cycle details
-    if hw._rfid_reader:
-        tags = hw._rfid_reader.read_rfid_tags_multiple()
-    else:
-        tags = hw.read_rfid_tags()
+    # Use voting method for better accuracy
+    tags = hw.read_rfid_tags_voting(total_cycles=5, min_appearances=2)
 
     if tags:
-        print(f"  PASS  {len(tags)} tag(s) detected:")
+        print(f"  PASS  {len(tags)} confirmed tag(s):")
         for tag in tags:
             print(f"          {tag}")
         return True

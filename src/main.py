@@ -357,8 +357,8 @@ class SmartCabinet:
 
         # Capture start snapshot (RFID tags present when unlocked)
         logger.info("Capturing start RFID snapshot...")
-        # Use single scan for start snapshot (faster unlock)
-        start_tags = self.hardware.read_rfid_tags()
+        # Use voting method for better accuracy (5 cycles, need 2+ appearances)
+        start_tags = self.hardware.read_rfid_tags_voting(total_cycles=5, min_appearances=2)
         logger.info(f"Start tags: {start_tags}")
         self.inventory.capture_start_snapshot(start_tags)
 
@@ -728,21 +728,16 @@ class SmartCabinet:
     # =================================================================================
 
     def _scan_rfid(self) -> list:
-        """Perform multiple RFID scans and return unique tags."""
-        all_tags = set()
-        scan_count = CONFIG.get('rfid_scan_count', 10)
+        """
+        Perform RFID scan with voting mechanism for accurate results.
 
-        logger.debug(f"Starting RFID scan ({scan_count} iterations)")
-
-        for i in range(scan_count):
-            tags = self.hardware.read_rfid_tags()
-            all_tags.update(tags)
-            if tags:
-                logger.debug(f"Scan {i+1}: {len(tags)} tags found")
-            time.sleep(0.1)
-
-        result = sorted(list(all_tags))
-        logger.info(f"RFID scan complete: {len(result)} unique tags found")
+        Uses 5 scan cycles and requires a tag to appear at least 2 times
+        to be considered present. This reduces false positives from
+        sporadic reads.
+        """
+        logger.info("Starting RFID voting scan (5 cycles, need 2+ appearances)")
+        result = self.hardware.read_rfid_tags_voting(total_cycles=5, min_appearances=2)
+        logger.info(f"RFID voting scan complete: {len(result)} confirmed tags")
         return result
 
     # =================================================================================
