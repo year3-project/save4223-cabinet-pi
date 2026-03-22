@@ -6,6 +6,7 @@ Runs in browser with live WebSocket updates.
 
 import json
 import logging
+import queue
 from datetime import datetime
 from typing import Optional, Dict, Any
 from pathlib import Path
@@ -56,6 +57,9 @@ class CabinetDisplayGUI:
 
         # Track connected clients for broadcasting
         self.clients = set()
+
+        # Thread-safe queue for messages from main thread
+        self._message_queue = queue.Queue()
 
     def setup(self):
         """Set up the UI."""
@@ -177,6 +181,9 @@ class CabinetDisplayGUI:
             def on_disconnect():
                 self.clients.discard(client_id)
             ui.context.client.on_disconnect(on_disconnect)
+
+        # Background task: drain message queue on NiceGUI's event loop
+        ui.timer(0.1, self._process_message_queue)
 
     def _update_stats_ui(self):
         """Update stats display."""
@@ -336,6 +343,15 @@ class CabinetDisplayGUI:
             # Keep current state, just update message
             self.update_state(self.current_state, self.status_message)
 
+    def _process_message_queue(self):
+        """Drain message queue — called from NiceGUI's event loop via ui.timer."""
+        try:
+            while True:
+                message = self._message_queue.get_nowait()
+                self.handle_message(message)
+        except queue.Empty:
+            pass
+
     def run(self):
         """Run the display (blocking)."""
         self.setup()
@@ -384,26 +400,18 @@ class CabinetDisplayGUI:
             show=False  # Don't auto-open browser (we do it ourselves)
         )
 
-    def run_in_thread(self):
-        """Run display in background thread."""
-        import threading
-        # Setup must be called in main thread before starting server thread
-        self.setup()
-        thread = threading.Thread(target=self._run_server, daemon=True)
-        thread.start()
-        return thread
-
     def _run_server(self):
-        """Internal: run just the server without blocking."""
-        import uvicorn
-        # Don't call setup() again - it was already called in run_in_thread
-        # Just run uvicorn with the already-configured app
-        uvicorn.run(
-            app,
+        """Run NiceGUI server in this thread (setup + ui.run)."""
+        import asyncio
+        asyncio.set_event_loop(asyncio.new_event_loop())
+        self.setup()
+        ui.run(
             host=self.host,
             port=self.port,
-            log_level="warning",
-            loop="asyncio"
+            title="Smart Cabinet",
+            favicon="🔐",
+            reload=False,
+            show=False,
         )
 
 
@@ -419,26 +427,22 @@ class DisplayThread:
         self._thread = None
 
     def start(self):
-        """Start display in thread."""
+        """Start display server in background thread."""
         import threading
-        self._thread = threading.Thread(target=self.display.run_in_thread, daemon=True)
+        self._thread = threading.Thread(target=self.display._run_server, daemon=True)
         self._thread.start()
 
     def stop(self):
         """Stop the display."""
-        # NiceGUI doesn't have a clean shutdown, but the thread is daemon
-        pass
+        pass  # daemon thread exits with main process
 
     def join(self, timeout: float = None):
-        """Join thread (no-op for daemon thread)."""
         if self._thread:
             self._thread.join(timeout=timeout)
 
     def send_message(self, message: Dict[str, Any]):
-        """Send message to display."""
-        # Schedule on NiceGUI's event loop
-        if NICEGUI_AVAILABLE:
-            ui.timer(0.1, lambda: self.display.handle_message(message), once=True)
+        """Thread-safe: put message on queue for NiceGUI event loop to process."""
+        self.display._message_queue.put(message)
 
 
 # Standalone test with real hardware
