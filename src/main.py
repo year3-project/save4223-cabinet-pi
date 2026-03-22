@@ -170,7 +170,7 @@ class SmartCabinet:
     # State Handlers
     # =================================================================================
 
-    def _on_locked(self):
+    def _on_locked(self, context=None):
         """Handle LOCKED state entry."""
         logger.info("=" * 50)
         logger.info("State: LOCKED - Ready for card/QR scan")
@@ -192,7 +192,7 @@ class SmartCabinet:
             'message': 'Tap card or scan QR code to open'
         })
 
-    def _on_authenticating(self):
+    def _on_authenticating(self, context=None):
         """Handle AUTHENTICATING state entry."""
         logger.info("State: AUTHENTICATING")
         self.hardware.set_all_leds('yellow')
@@ -327,7 +327,7 @@ class SmartCabinet:
 
         return {'authorized': False, 'reason': 'Card not registered'}
 
-    def _on_unlocked(self):
+    def _on_unlocked(self, context=None):
         """Handle UNLOCKED state entry."""
         logger.info("State: UNLOCKED")
         self.hardware.set_all_leds('green')
@@ -351,6 +351,7 @@ class SmartCabinet:
         self._send_to_display({
             'type': 'STATE_CHANGE',
             'state': 'UNLOCKED',
+            'user': {'name': self.current_user_name} if self.current_user_name else None,
             'message': f'Welcome {self.current_user_name}! Take or return tools, then tap card again to close.',
             'session_id': self.session_id,
             'start_tags': len(start_tags)
@@ -396,7 +397,7 @@ class SmartCabinet:
         })
         self.state_machine.transition(SystemState.SCANNING)
 
-    def _on_scanning(self):
+    def _on_scanning(self, context=None):
         """Handle SCANNING state entry (end of session)."""
         logger.info("State: SCANNING - Finalizing session")
         self.hardware.set_all_leds('yellow')
@@ -453,16 +454,12 @@ class SmartCabinet:
                 item_name=item.get('name', 'Unknown')
             )
 
-        # Display summary
+        # Display summary (flat payload for display compatibility)
         self._send_to_display({
             'type': 'SESSION_SUMMARY',
-            'summary': {
-                'borrowed': borrowed,
-                'returned': returned,
-                'borrowed_count': len(borrowed),
-                'returned_count': len(returned)
-            },
-            'user_name': self.current_user_name
+            'user_name': self.current_user_name,
+            'borrowed': borrowed,
+            'returned': returned
         })
 
         # Try to sync with server

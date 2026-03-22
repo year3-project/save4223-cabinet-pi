@@ -449,11 +449,26 @@ class CabinetDisplayGUI:
 
         if msg_type == "STATE_CHANGE":
             state_str = message.get("state", "IDLE")
-            try:
-                state = DisplayState[state_str]
-            except KeyError:
-                state = DisplayState.IDLE
-            self.set_state(state, message.get("message", ""))
+            # Map SystemState names to DisplayState names
+            state_map = {
+                "LOCKED": DisplayState.IDLE,
+                "AUTHENTICATING": DisplayState.RFID_SCANNING,  # Show scanning indicator during auth
+                "UNLOCKED": DisplayState.LOGIN_SUCCESS,
+                "SCANNING": DisplayState.RFID_SCANNING,
+                "IDLE": DisplayState.IDLE,
+                "LOGIN_SUCCESS": DisplayState.LOGIN_SUCCESS,
+                "CHECKOUT_WARNING": DisplayState.CHECKOUT_WARNING,
+                "RFID_SCANNING": DisplayState.RFID_SCANNING,
+                "SESSION_SUMMARY": DisplayState.SESSION_SUMMARY,
+                "ERROR": DisplayState.ERROR,
+            }
+            state = state_map.get(state_str, DisplayState.IDLE)
+
+            # For UNLOCKED state, include user info if provided
+            data = None
+            if state == DisplayState.LOGIN_SUCCESS and message.get("user"):
+                data = {"user": message.get("user")}
+            self.set_state(state, message.get("message", ""), data=data)
 
         elif msg_type == "DRAWER_STATES":
             self.update_drawer_indicators(message.get("states", {}))
@@ -489,6 +504,30 @@ class CabinetDisplayGUI:
 
         elif msg_type == "WARNING":
             self.set_state(DisplayState.ERROR, message.get("message", ""))
+
+        # Pairing mode handlers
+        elif msg_type == "PAIRING_MODE":
+            self.set_state(DisplayState.IDLE, message.get("message", "Pairing mode active. Tap unpaired card to begin."))
+
+        elif msg_type == "PAIRING_PROMPT":
+            self.set_state(DisplayState.RFID_SCANNING, message.get("message", "Show pairing QR code or enter code"))
+
+        elif msg_type == "PAIRING_SUCCESS":
+            self.set_state(DisplayState.LOGIN_SUCCESS, message.get("message", "Pairing successful!"))
+
+        elif msg_type == "PAIRING_FAILURE":
+            self.set_state(DisplayState.ERROR, message.get("error", message.get("message", "Pairing failed")))
+
+        # Sync handlers
+        elif msg_type == "SYNC_QUEUED":
+            # Show as info on top of current state - for now just log
+            logger.info(f"Sync queued: {message.get('message', '')}")
+
+        elif msg_type == "SYNC_SUCCESS":
+            logger.info(f"Sync success: {message.get('message', '')}")
+
+        elif msg_type == "TIMEOUT":
+            self.set_state(DisplayState.ERROR, message.get("message", "Session timeout"))
 
     def _process_message_queue(self):
         """Drain message queue."""
