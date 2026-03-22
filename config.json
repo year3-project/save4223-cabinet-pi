@@ -8,7 +8,7 @@
     "sync_interval": 60,
     "num_drawers": 4,
     "hardware": {
-        "mode": "raspberry_pi",
+        "mode": "raspberry_pi"
     },
     "ssl": {
         "verify": true
