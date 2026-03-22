@@ -105,7 +105,10 @@ class InventoryManager:
         borrowed_tags = start_rfids - end_rfids  # Was there, now gone
         returned_tags = end_rfids - start_rfids  # Wasn't there, now is
 
-        logger.info(f"End snapshot: {len(end_rfids)} tags")
+        logger.info(f"Start snapshot: {sorted(start_rfids)}")
+        logger.info(f"End snapshot: {sorted(end_rfids)}")
+        logger.info(f"Borrowed (in start, not in end): {sorted(borrowed_tags)}")
+        logger.info(f"Returned (in end, not in start): {sorted(returned_tags)}")
         logger.info(f"Diff: {len(borrowed_tags)} borrowed, {len(returned_tags)} returned")
 
         # Convert tags to item details

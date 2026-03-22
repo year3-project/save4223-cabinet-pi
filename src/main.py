@@ -228,8 +228,25 @@ class SmartCabinet:
             self._handle_pairing_scan(card_uid)
             return
 
-        # Normal authentication flow
-        result = self._authenticate(card_uid)
+        # Normal authentication flow with 5-second total timeout
+        import threading
+        auth_result = [None]
+        def do_auth():
+            auth_result[0] = self._authenticate(card_uid)
+        auth_thread = threading.Thread(target=do_auth)
+        auth_thread.start()
+        auth_thread.join(timeout=5)  # 5 second max for auth
+        if auth_thread.is_alive():
+            logger.warning("Authentication timed out after 5 seconds")
+            self.hardware.beep_error()
+            self._send_to_display({
+                'type': 'AUTH_FAILURE',
+                'error': 'Authentication timeout'
+            })
+            time.sleep(2)
+            self.state_machine.transition(SystemState.LOCKED)
+            return
+        result = auth_result[0]
 
         if result.get('authorized'):
             self._handle_auth_success(result)
@@ -341,6 +358,7 @@ class SmartCabinet:
         logger.info("Capturing start RFID snapshot...")
         # Use single scan for start snapshot (faster unlock)
         start_tags = self.hardware.read_rfid_tags()
+        logger.info(f"Start tags: {start_tags}")
         self.inventory.capture_start_snapshot(start_tags)
 
         self.local_db.log_access(
@@ -418,6 +436,7 @@ class SmartCabinet:
         # Capture end snapshot
         logger.info("Capturing end RFID snapshot...")
         end_tags = self._scan_rfid()
+        logger.info(f"End tags: {end_tags}")
 
         self.local_db.log_access(
             card_uid=self.current_card_uid,
