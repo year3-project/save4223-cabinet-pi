@@ -99,103 +99,88 @@ class CabinetDisplayGUI:
             client_id = ui.context.client.id
             self.clients.add(client_id)
 
-            # Page styling
+            # Page styling - DaisyUI ISD Theme
             ui.add_head_html('''
                 <style>
+                    :root {
+                        --color-base-100: oklch(98% 0.003 247.858);
+                        --color-base-200: oklch(96% 0.007 247.896);
+                        --color-base-300: oklch(92% 0.013 255.508);
+                        --color-base-content: oklch(27% 0.041 260.031);
+                        --color-primary: #F1F7FF;
+                        --color-primary-content: #003974;
+                        --color-secondary: #FFF4F2;
+                        --color-secondary-content: #EC7B60;
+                        --color-accent: #003974;
+                        --color-accent-content: #FFFFFF;
+                        --color-success: oklch(87% 0.15 154.449);
+                        --color-success-content: oklch(27% 0.072 132.109);
+                        --color-warning: oklch(83% 0.128 66.29);
+                        --color-warning-content: oklch(26% 0.079 36.259);
+                        --color-error: oklch(71% 0.194 13.428);
+                        --color-error-content: oklch(28% 0.109 3.907);
+                        --radius: 0.5rem;
+                    }
                     body {
-                        margin: 0;
-                        padding: 0;
-                        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-                        color: white;
+                        margin: 0; padding: 0;
+                        background: var(--color-base-100);
+                        color: var(--color-base-content);
                         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
                         overflow: hidden;
                         display: flex;
                     }
                     .cabinet-panel {
-                        flex: 0.8;
-                        display: flex;
-                        flex-direction: column;
-                        align-items: center;
-                        justify-content: center;
-                        padding: 30px;
-                        background: rgba(0, 0, 0, 0.2);
+                        flex: 0.8; display: flex; flex-direction: column;
+                        align-items: center; justify-content: center; padding: 30px;
+                        background: var(--color-base-200);
+                        border-right: 1px solid var(--color-base-300);
                     }
                     .status-panel {
-                        flex: 1.2;
-                        display: flex;
-                        flex-direction: column;
-                        align-items: center;
-                        justify-content: center;
-                        padding: 40px;
+                        flex: 1.2; display: flex; flex-direction: column;
+                        align-items: center; justify-content: center; padding: 40px;
+                        background: var(--color-base-100);
                     }
-                    .cabinet-container {
-                        position: relative;
-                        width: 200px;
-                    }
+                    .cabinet-container { position: relative; width: 200px; }
                     .cabinet-top {
-                        width: 100%;
-                        height: 25px;
+                        width: 100%; height: 25px;
                         background: linear-gradient(180deg, #d4a574 0%, #c4956a 100%);
-                        border-radius: 8px 8px 0 0;
+                        border-radius: var(--radius) var(--radius) 0 0;
                     }
                     .cabinet-body {
-                        background: #2d2d3a;
-                        padding: 8px;
-                        border-radius: 0 0 8px 8px;
-                        display: flex;
-                        flex-direction: column;
-                        gap: 6px;
+                        background: var(--color-base-300);
+                        padding: 8px; border-radius: 0 0 var(--radius) var(--radius);
+                        display: flex; flex-direction: column; gap: 6px;
                     }
                     .drawer {
-                        position: relative;
-                        height: 60px;
-                        border-radius: 6px;
+                        position: relative; height: 60px; border-radius: var(--radius);
                         background: linear-gradient(135deg, #5a9fd4 0%, #4a8fc4 100%);
-                        display: flex;
-                        align-items: center;
-                        justify-content: center;
+                        display: flex; align-items: center; justify-content: center;
+                        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
                     }
-                    .drawer-handle {
-                        width: 50%;
-                        height: 6px;
-                        background: #333;
-                        border-radius: 3px;
-                    }
+                    .drawer-handle { width: 50%; height: 6px; background: #333; border-radius: 3px; }
                     .drawer-indicator {
-                        position: absolute;
-                        top: 6px;
-                        right: 8px;
-                        width: 10px;
-                        height: 10px;
-                        border-radius: 50%;
-                        transition: all 0.3s ease;
-                    }
-                    .drawer-indicator.closed {
-                        background: transparent;
+                        position: absolute; top: 6px; right: 8px;
+                        width: 12px; height: 12px; border-radius: 50%;
+                        background: var(--color-success); border: 2px solid rgba(255,255,255,0.5);
+                        transition: all 0.3s ease; opacity: 0;
                     }
                     .drawer-indicator.open {
-                        background: #ff4757;
-                        box-shadow: 0 0 8px #ff4757, 0 0 16px #ff4757;
+                        opacity: 1; background: var(--color-error);
+                        box-shadow: 0 0 8px var(--color-error);
                         animation: pulse-warning 1s infinite;
                     }
                     .drawer-number {
-                        position: absolute;
-                        bottom: 4px;
-                        left: 6px;
-                        font-size: 10px;
-                        color: rgba(0,0,0,0.3);
-                        font-weight: 600;
+                        position: absolute; bottom: 4px; left: 6px;
+                        font-size: 10px; font-weight: 600; color: rgba(0,0,0,0.3);
                     }
                     @keyframes pulse-warning {
-                        0%, 100% { opacity: 1; }
-                        50% { opacity: 0.5; }
+                        0%, 100% { opacity: 1; box-shadow: 0 0 8px var(--color-error); }
+                        50% { opacity: 0.7; box-shadow: 0 0 16px var(--color-error); }
                     }
                     .scanning-dots { display: flex; gap: 6px; margin-top: 15px; }
                     .scanning-dot {
-                        width: 10px;
-                        height: 10px;
-                        background: #ffd700;
-                        border-radius: 50%;
+                        width: 10px; height: 10px;
+                        background: var(--color-warning); border-radius: 50%;
                         animation: scan-pulse 1.4s infinite;
                     }
                     .scanning-dot:nth-child(2) { animation-delay: 0.2s; }
@@ -229,19 +214,19 @@ class CabinetDisplayGUI:
                 # Right Panel: Status Display
                 with ui.element('div').classes('status-panel'):
                     ui.label('Welcome to Save4223').style('''
-                        font-size: 42px; font-weight: 700;
-                        background: linear-gradient(135deg, #00d9ff 0%, #00ff88 100%);
-                        -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+                        font-size: 36px; font-weight: 700;
+                        color: var(--color-accent);
                         margin-bottom: 30px; text-align: center;
                     ''')
 
                     with ui.card().classes('w-full').style('''
-                        max-width: 450px; background: rgba(255,255,255,0.05);
-                        border: 2px solid rgba(255,255,255,0.1); border-radius: 16px;
+                        max-width: 450px; background: white;
+                        border: 2px solid var(--color-base-300); border-radius: var(--radius);
                         padding: 30px 40px; text-align: center;
+                        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
                     ''') as self.status_card:
                         self.status_icon = ui.label('💳').style('font-size: 48px; margin-bottom: 15px;')
-                        self.status_label = ui.label('Tap your card to access the cabinet').style('font-size: 20px; color: #e0e0e0; line-height: 1.4;')
+                        self.status_label = ui.label('Tap your card to access the cabinet').style('font-size: 18px; color: var(--color-base-content); line-height: 1.5;')
 
                         # Scanning animation
                         with ui.row().classes('scanning-dots hidden').style('') as self.scanning_container:
@@ -252,23 +237,23 @@ class CabinetDisplayGUI:
                         # Warning label
                         self.warning_label = ui.label('').style('''
                             margin-top: 12px; padding: 10px;
-                            background: rgba(255,71,87,0.1); border-radius: 6px;
-                            color: #ff6b6b; font-size: 14px;
+                            background: var(--color-secondary); border-radius: var(--radius);
+                            color: var(--color-secondary-content); font-size: 14px;
                         ''')
                         self.warning_label.classes('hidden')
 
                     # User info
-                    with ui.card().style('margin-top: 20px; padding: 15px 25px; background: rgba(0,217,255,0.1); border-radius: 10px; border: 1px solid rgba(0,217,255,0.3); display: none;') as self.user_card:
-                        self.user_name_label = ui.label('').style('font-size: 22px; font-weight: 600; color: #00d9ff;')
+                    with ui.card().style('margin-top: 20px; padding: 15px 25px; background: var(--color-primary); border-radius: var(--radius); display: none;') as self.user_card:
+                        self.user_name_label = ui.label('').style('font-size: 20px; font-weight: 600; color: var(--color-primary-content);')
 
                     # Transaction summary
-                    with ui.column().style('margin-top: 20px; display: none; text-align: left;') as self.summary_container:
-                        with ui.column().style('margin-bottom: 12px;') as self.borrowed_section:
-                            ui.label('📤 Borrowed').style('font-size: 14px; font-weight: 600; color: #ff6b6b; margin-bottom: 6px;')
+                    with ui.column().style('margin-top: 20px; display: none; text-align: left; width: 100%; max-width: 450px;') as self.summary_container:
+                        with ui.column().style('margin-bottom: 12px; background: white; border-radius: var(--radius); padding: 15px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); border-left: 4px solid var(--color-error);') as self.borrowed_section:
+                            ui.label('📤 Borrowed').style('font-size: 14px; font-weight: 600; color: var(--color-error-content); margin-bottom: 8px;')
                             self.borrowed_list = ui.column()
 
-                        with ui.column() as self.returned_section:
-                            ui.label('📥 Returned').style('font-size: 14px; font-weight: 600; color: #51cf66; margin-bottom: 6px;')
+                        with ui.column().style('background: white; border-radius: var(--radius); padding: 15px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); border-left: 4px solid var(--color-success);') as self.returned_section:
+                            ui.label('📥 Returned').style('font-size: 14px; font-weight: 600; color: var(--color-success-content); margin-bottom: 8px;')
                             self.returned_list = ui.column()
 
             # Timer to poll message queue
@@ -287,8 +272,17 @@ class CabinetDisplayGUI:
         if not self.hardware or not self._poll_hardware:
             return
 
+        # Check if hardware is initialized
+        if not getattr(self.hardware, '_initialized', False):
+            return
+
         try:
+            # Import here to avoid issues if hardware module not available
+            import sys
+            from pathlib import Path
+            sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
             from hardware.base import DrawerState
+
             new_states = {}
             for i in range(4):
                 state = self.hardware.get_drawer_state(i)
@@ -340,11 +334,12 @@ class CabinetDisplayGUI:
         self.warning_label.classes('hidden', remove='')
         self.status_card.classes(remove='success warning processing')
 
-        # Reset card border style
+        # Reset card border style (ISD theme default)
         self.status_card.style('''
-            max-width: 450px; background: rgba(255,255,255,0.05);
-            border: 2px solid rgba(255,255,255,0.1); border-radius: 16px;
+            max-width: 450px; background: white;
+            border: 2px solid var(--color-base-300); border-radius: var(--radius);
             padding: 30px 40px; text-align: center;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
         ''')
 
         if state == DisplayState.IDLE:
@@ -353,9 +348,10 @@ class CabinetDisplayGUI:
 
         elif state == DisplayState.LOGIN_SUCCESS:
             self.status_card.style('''
-                max-width: 450px; background: rgba(255,255,255,0.05);
-                border: 2px solid #00ff88; border-radius: 16px;
-                padding: 30px 40px; text-align: center; box-shadow: 0 0 20px rgba(0,255,136,0.2);
+                max-width: 450px; background: white;
+                border: 2px solid var(--color-success); border-radius: var(--radius);
+                padding: 30px 40px; text-align: center;
+                box-shadow: 0 0 0 4px rgba(134,239,172,0.2);
             ''')
             self.status_icon.set_text('✅')
             self.status_label.set_text(message or "Login successful, you may now open the cabinet")
@@ -366,9 +362,10 @@ class CabinetDisplayGUI:
 
         elif state == DisplayState.CHECKOUT_WARNING:
             self.status_card.style('''
-                max-width: 450px; background: rgba(255,255,255,0.05);
-                border: 2px solid #ff4757; border-radius: 16px;
-                padding: 30px 40px; text-align: center; box-shadow: 0 0 20px rgba(255,71,87,0.2);
+                max-width: 450px; background: white;
+                border: 2px solid var(--color-error); border-radius: var(--radius);
+                padding: 30px 40px; text-align: center;
+                box-shadow: 0 0 0 4px rgba(252,165,165,0.2);
             ''')
             self.status_icon.set_text('⚠️')
             self.status_label.set_text(message or "Please close all drawers to complete checkout")
@@ -380,9 +377,10 @@ class CabinetDisplayGUI:
 
         elif state == DisplayState.RFID_SCANNING:
             self.status_card.style('''
-                max-width: 450px; background: rgba(255,255,255,0.05);
-                border: 2px solid #ffd700; border-radius: 16px;
-                padding: 30px 40px; text-align: center; box-shadow: 0 0 20px rgba(255,215,0,0.2);
+                max-width: 450px; background: white;
+                border: 2px solid var(--color-warning); border-radius: var(--radius);
+                padding: 30px 40px; text-align: center;
+                box-shadow: 0 0 0 4px rgba(253,224,71,0.2);
             ''')
             self.status_icon.set_text('📡')
             self.status_label.set_text(message or "RFID Scanning in progress")
@@ -390,9 +388,10 @@ class CabinetDisplayGUI:
 
         elif state == DisplayState.SESSION_SUMMARY:
             self.status_card.style('''
-                max-width: 450px; background: rgba(255,255,255,0.05);
-                border: 2px solid #00ff88; border-radius: 16px;
-                padding: 30px 40px; text-align: center; box-shadow: 0 0 20px rgba(0,255,136,0.2);
+                max-width: 450px; background: white;
+                border: 2px solid var(--color-success); border-radius: var(--radius);
+                padding: 30px 40px; text-align: center;
+                box-shadow: 0 0 0 4px rgba(134,239,172,0.2);
             ''')
             self.status_icon.set_text('✓')
             self.status_label.set_text(message or "Session complete!")
@@ -406,13 +405,14 @@ class CabinetDisplayGUI:
 
             if borrowed or returned:
                 self._update_transaction_lists(borrowed, returned)
-                self.summary_container.style('display: flex;')
+                self.summary_container.style('display: block;')
 
         elif state == DisplayState.ERROR:
             self.status_card.style('''
-                max-width: 450px; background: rgba(255,255,255,0.05);
-                border: 2px solid #ff4757; border-radius: 16px;
-                padding: 30px 40px; text-align: center; box-shadow: 0 0 20px rgba(255,71,87,0.2);
+                max-width: 450px; background: white;
+                border: 2px solid var(--color-error); border-radius: var(--radius);
+                padding: 30px 40px; text-align: center;
+                box-shadow: 0 0 0 4px rgba(252,165,165,0.2);
             ''')
             self.status_icon.set_text('❌')
             self.status_label.set_text(message or "An error occurred")
@@ -425,9 +425,9 @@ class CabinetDisplayGUI:
             if borrowed:
                 self.borrowed_section.style('display: block;')
                 for item in borrowed:
-                    with ui.row().style('padding: 6px 10px; background: rgba(255,255,255,0.05); border-radius: 6px; margin-bottom: 4px; align-items: center;'):
+                    with ui.row().style('padding: 8px 12px; background: var(--color-base-200); border-radius: var(--radius); margin-bottom: 4px; align-items: center;'):
                         ui.label('📤').style('font-size: 14px;')
-                        ui.label(item.get('name', item.get('rfid', 'Unknown'))).style('font-size: 13px;')
+                        ui.label(item.get('name', item.get('rfid', 'Unknown'))).style('font-size: 14px; color: var(--color-base-content);')
             else:
                 self.borrowed_section.style('display: none;')
 
@@ -437,9 +437,9 @@ class CabinetDisplayGUI:
             if returned:
                 self.returned_section.style('display: block;')
                 for item in returned:
-                    with ui.row().style('padding: 6px 10px; background: rgba(255,255,255,0.05); border-radius: 6px; margin-bottom: 4px; align-items: center;'):
+                    with ui.row().style('padding: 8px 12px; background: var(--color-base-200); border-radius: var(--radius); margin-bottom: 4px; align-items: center;'):
                         ui.label('📥').style('font-size: 14px;')
-                        ui.label(item.get('name', item.get('rfid', 'Unknown'))).style('font-size: 13px;')
+                        ui.label(item.get('name', item.get('rfid', 'Unknown'))).style('font-size: 14px; color: var(--color-base-content);')
             else:
                 self.returned_section.style('display: none;')
 

@@ -98,7 +98,7 @@ class SmartCabinet:
         self.pairing_handler = PairingHandler(self.api, self.local_db)
         self.inventory = InventoryManager(self.local_db)
 
-        # Initialize display (optional)
+        # Initialize display (optional) - pass hardware for real-time drawer status
         self.display = None
         if DISPLAY_AVAILABLE and CONFIG.get('display', {}).get('enabled', True):
             try:
@@ -106,7 +106,8 @@ class SmartCabinet:
                 self.display = DisplayThread(
                     width=display_config.get('width', 800),
                     height=display_config.get('height', 480),
-                    fullscreen=display_config.get('fullscreen', True)
+                    fullscreen=display_config.get('fullscreen', True),
+                    hardware=self.hardware  # Pass hardware for real-time status
                 )
                 self.display.start()
                 logger.info("Display started")

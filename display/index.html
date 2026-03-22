@@ -5,12 +5,37 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Save4223 - Smart Cabinet</title>
     <style>
+        /* DaisyUI ISD Theme Variables */
+        :root {
+            --color-base-100: oklch(98% 0.003 247.858);
+            --color-base-200: oklch(96% 0.007 247.896);
+            --color-base-300: oklch(92% 0.013 255.508);
+            --color-base-content: oklch(27% 0.041 260.031);
+            --color-primary: #F1F7FF;
+            --color-primary-content: #003974;
+            --color-secondary: #FFF4F2;
+            --color-secondary-content: #EC7B60;
+            --color-accent: #003974;
+            --color-accent-content: #FFFFFF;
+            --color-neutral: oklch(95% 0.026 236.824);
+            --color-neutral-content: oklch(27% 0.041 260.031);
+            --color-info: oklch(82% 0.111 230.318);
+            --color-info-content: oklch(29% 0.066 243.157);
+            --color-success: oklch(87% 0.15 154.449);
+            --color-success-content: oklch(27% 0.072 132.109);
+            --color-warning: oklch(83% 0.128 66.29);
+            --color-warning-content: oklch(26% 0.079 36.259);
+            --color-error: oklch(71% 0.194 13.428);
+            --color-error-content: oklch(28% 0.109 3.907);
+            --radius: 0.5rem;
+        }
+
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-            color: #fff;
+            background: var(--color-base-100);
+            color: var(--color-base-content);
             height: 100vh;
             overflow: hidden;
             display: flex;
@@ -24,16 +49,18 @@
             align-items: center;
             justify-content: center;
             padding: 30px;
-            background: rgba(0, 0, 0, 0.2);
+            background: var(--color-base-200);
+            border-right: 1px solid var(--color-base-300);
         }
 
         .cabinet-title {
-            font-size: 18px;
+            font-size: 16px;
             font-weight: 600;
-            color: #8892b0;
+            color: var(--color-base-content);
             margin-bottom: 20px;
             text-transform: uppercase;
             letter-spacing: 1px;
+            opacity: 0.7;
         }
 
         .cabinet-container {
@@ -46,14 +73,14 @@
             width: 100%;
             height: 25px;
             background: linear-gradient(180deg, #d4a574 0%, #c4956a 100%);
-            border-radius: 8px 8px 0 0;
+            border-radius: var(--radius) var(--radius) 0 0;
         }
 
         /* Cabinet body with 4 vertical drawers */
         .cabinet-body {
-            background: #2d2d3a;
+            background: var(--color-base-300);
             padding: 8px;
-            border-radius: 0 0 8px 8px;
+            border-radius: 0 0 var(--radius) var(--radius);
             display: flex;
             flex-direction: column;
             gap: 6px;
@@ -62,12 +89,13 @@
         .drawer {
             position: relative;
             height: 60px;
-            border-radius: 6px;
+            border-radius: var(--radius);
             background: linear-gradient(135deg, #5a9fd4 0%, #4a8fc4 100%);
             display: flex;
             align-items: center;
             justify-content: center;
             transition: all 0.3s ease;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
         }
 
         .drawer-handle {
@@ -82,22 +110,25 @@
             position: absolute;
             top: 6px;
             right: 8px;
-            width: 10px;
-            height: 10px;
+            width: 12px;
+            height: 12px;
             border-radius: 50%;
-            background: transparent;
+            background: var(--color-success);
+            border: 2px solid rgba(255, 255, 255, 0.5);
             transition: all 0.3s ease;
+            opacity: 0;
         }
 
         .drawer-indicator.open {
-            background: #ff4757;
-            box-shadow: 0 0 8px #ff4757, 0 0 16px #ff4757;
+            opacity: 1;
+            background: var(--color-error);
+            box-shadow: 0 0 8px var(--color-error);
             animation: pulse-warning 1s infinite;
         }
 
         @keyframes pulse-warning {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.5; }
+            0%, 100% { opacity: 1; box-shadow: 0 0 8px var(--color-error); }
+            50% { opacity: 0.7; box-shadow: 0 0 16px var(--color-error); }
         }
 
         .drawer-number {
@@ -117,43 +148,42 @@
             align-items: center;
             justify-content: center;
             padding: 40px;
+            background: var(--color-base-100);
         }
 
         .welcome-title {
-            font-size: 42px;
+            font-size: 36px;
             font-weight: 700;
-            background: linear-gradient(135deg, #00d9ff 0%, #00ff88 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
+            color: var(--color-accent);
             margin-bottom: 30px;
             text-align: center;
         }
 
         .status-card {
-            background: rgba(255, 255, 255, 0.05);
-            border: 2px solid rgba(255, 255, 255, 0.1);
-            border-radius: 16px;
+            background: white;
+            border: 2px solid var(--color-base-300);
+            border-radius: var(--radius);
             padding: 30px 40px;
             text-align: center;
             max-width: 450px;
             width: 100%;
-            transition: all 0.5s ease;
+            transition: all 0.3s ease;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
         }
 
         .status-card.success {
-            border-color: #00ff88;
-            box-shadow: 0 0 20px rgba(0, 255, 136, 0.2);
+            border-color: var(--color-success);
+            box-shadow: 0 0 0 4px rgba(134, 239, 172, 0.2);
         }
 
         .status-card.warning {
-            border-color: #ff4757;
-            box-shadow: 0 0 20px rgba(255, 71, 87, 0.2);
+            border-color: var(--color-error);
+            box-shadow: 0 0 0 4px rgba(252, 165, 165, 0.2);
         }
 
         .status-card.processing {
-            border-color: #ffd700;
-            box-shadow: 0 0 20px rgba(255, 215, 0, 0.2);
+            border-color: var(--color-warning);
+            box-shadow: 0 0 0 4px rgba(253, 224, 71, 0.2);
         }
 
         .status-icon {
@@ -162,18 +192,17 @@
         }
 
         .status-message {
-            font-size: 20px;
-            color: #e0e0e0;
-            line-height: 1.4;
+            font-size: 18px;
+            color: var(--color-base-content);
+            line-height: 1.5;
         }
 
         /* User info display */
         .user-info {
             margin-top: 20px;
             padding: 15px 25px;
-            background: rgba(0, 217, 255, 0.1);
-            border-radius: 10px;
-            border: 1px solid rgba(0, 217, 255, 0.3);
+            background: var(--color-primary);
+            border-radius: var(--radius);
             display: none;
         }
 
@@ -182,9 +211,9 @@
         }
 
         .user-name {
-            font-size: 22px;
+            font-size: 20px;
             font-weight: 600;
-            color: #00d9ff;
+            color: var(--color-primary-content);
         }
 
         /* Transaction summary */
@@ -192,43 +221,57 @@
             margin-top: 20px;
             text-align: left;
             display: none;
+            width: 100%;
+            max-width: 450px;
         }
 
         .transaction-summary.visible {
-            display: flex;
-            flex-direction: column;
+            display: block;
         }
 
         .transaction-section {
             margin-bottom: 12px;
+            background: white;
+            border-radius: var(--radius);
+            padding: 15px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
         }
 
         .transaction-section h4 {
             font-size: 14px;
             font-weight: 600;
-            margin-bottom: 6px;
+            margin-bottom: 8px;
             display: flex;
             align-items: center;
             gap: 6px;
         }
 
         .transaction-section.borrowed h4 {
-            color: #ff6b6b;
+            color: var(--color-error-content);
+        }
+
+        .transaction-section.borrowed {
+            border-left: 4px solid var(--color-error);
         }
 
         .transaction-section.returned h4 {
-            color: #51cf66;
+            color: var(--color-success-content);
+        }
+
+        .transaction-section.returned {
+            border-left: 4px solid var(--color-success);
         }
 
         .transaction-item {
-            padding: 6px 10px;
-            background: rgba(255, 255, 255, 0.05);
-            border-radius: 6px;
+            padding: 8px 12px;
+            background: var(--color-base-200);
+            border-radius: var(--radius);
             margin-bottom: 4px;
             display: flex;
             align-items: center;
             gap: 8px;
-            font-size: 13px;
+            font-size: 14px;
+            color: var(--color-base-content);
         }
 
         /* Scanning animation */
@@ -247,7 +290,7 @@
         .scanning-dot {
             width: 10px;
             height: 10px;
-            background: #ffd700;
+            background: var(--color-warning);
             border-radius: 50%;
             animation: scanning-pulse 1.4s infinite ease-in-out;
         }
@@ -265,10 +308,10 @@
         .warning-details {
             margin-top: 12px;
             padding: 10px;
-            background: rgba(255, 71, 87, 0.1);
-            border-radius: 6px;
+            background: var(--color-secondary);
+            border-radius: var(--radius);
             font-size: 14px;
-            color: #ff6b6b;
+            color: var(--color-secondary-content);
             display: none;
         }
 
@@ -363,7 +406,7 @@
 
         let currentState = DisplayState.IDLE;
         let currentUser = null;
-        let drawerStates = { 0: false, 1: false, 2: false, 3: false }; // false = closed, true = open
+        let drawerStates = { 0: false, 1: false, 2: false, 3: false };
 
         // DOM elements
         const statusCard = document.getElementById('statusCard');
@@ -377,7 +420,7 @@
         const borrowedList = document.getElementById('borrowedList');
         const returnedList = document.getElementById('returnedList');
 
-        // Update drawer indicators (0-indexed)
+        // Update drawer indicators
         function updateDrawerIndicators(states) {
             drawerStates = states || drawerStates;
             for (let i = 0; i < 4; i++) {
@@ -390,19 +433,16 @@
             }
         }
 
-        // Check if any drawer is open
         function anyDrawerOpen() {
             return Object.values(drawerStates).some(open => open);
         }
 
-        // Get open drawer numbers (1-indexed for display)
         function getOpenDrawerNumbers() {
             return Object.entries(drawerStates)
                 .filter(([_, open]) => open)
                 .map(([idx]) => parseInt(idx) + 1);
         }
 
-        // Set display state
         function setState(newState, data = {}) {
             currentState = newState;
 
@@ -470,28 +510,19 @@
             }
         }
 
-        // Show transactions
         function showTransactions(borrowed, returned) {
-            // Borrowed items
             if (borrowed.length > 0) {
                 borrowedList.innerHTML = borrowed.map(item =>
-                    `<div class="transaction-item">
-                        <span>📤</span>
-                        <span>${item.name || item.rfid}</span>
-                    </div>`
+                    `<div class="transaction-item"><span>📤</span><span>${item.name || item.rfid}</span></div>`
                 ).join('');
                 document.getElementById('borrowedSection').style.display = 'block';
             } else {
                 document.getElementById('borrowedSection').style.display = 'none';
             }
 
-            // Returned items
             if (returned.length > 0) {
                 returnedList.innerHTML = returned.map(item =>
-                    `<div class="transaction-item">
-                        <span>📥</span>
-                        <span>${item.name || item.rfid}</span>
-                    </div>`
+                    `<div class="transaction-item"><span>📥</span><span>${item.name || item.rfid}</span></div>`
                 ).join('');
                 document.getElementById('returnedSection').style.display = 'block';
             } else {
@@ -499,7 +530,6 @@
             }
         }
 
-        // Handle checkout attempt (check if drawers closed)
         function handleCheckoutTap() {
             if (anyDrawerOpen()) {
                 setState(DisplayState.CHECKOUT_WARNING);
@@ -508,7 +538,6 @@
             return true;
         }
 
-        // Public API for external control
         window.cabinetDisplay = {
             setState,
             setDrawerStates: updateDrawerIndicators,
@@ -521,56 +550,17 @@
         // Demo mode
         function runDemo() {
             console.log('Starting display demo...');
-
-            // IDLE state
             setState(DisplayState.IDLE);
             updateDrawerIndicators({ 0: false, 1: false, 2: false, 3: false });
 
-            setTimeout(() => {
-                // Login success
-                setState(DisplayState.LOGIN_SUCCESS, {
-                    user: { name: 'Demo User' }
-                });
-            }, 3000);
-
-            setTimeout(() => {
-                // Simulate drawer opening
-                updateDrawerIndicators({ 0: true, 1: false, 2: true, 3: false });
-            }, 6000);
-
-            setTimeout(() => {
-                // Try checkout with open drawers
-                handleCheckoutTap();
-            }, 8000);
-
-            setTimeout(() => {
-                // Close drawers
-                updateDrawerIndicators({ 0: false, 1: false, 2: false, 3: false });
-                // Start scanning
-                setState(DisplayState.RFID_SCANNING);
-            }, 11000);
-
-            setTimeout(() => {
-                // Show summary
-                setState(DisplayState.SESSION_SUMMARY, {
-                    user: { name: 'Demo User' },
-                    borrowed: [
-                        { name: 'Arduino Uno', rfid: 'RFID-001' },
-                        { name: 'Screwdriver Set', rfid: 'RFID-002' }
-                    ],
-                    returned: [
-                        { name: 'Multimeter', rfid: 'RFID-003' }
-                    ]
-                });
-            }, 14000);
-
-            setTimeout(() => {
-                // Back to idle
-                setState(DisplayState.IDLE);
-            }, 20000);
+            setTimeout(() => setState(DisplayState.LOGIN_SUCCESS, { user: { name: 'Demo User' } }), 3000);
+            setTimeout(() => updateDrawerIndicators({ 0: true, 1: false, 2: true, 3: false }), 6000);
+            setTimeout(() => handleCheckoutTap(), 8000);
+            setTimeout(() => { updateDrawerIndicators({ 0: false, 1: false, 2: false, 3: false }); setState(DisplayState.RFID_SCANNING); }, 11000);
+            setTimeout(() => setState(DisplayState.SESSION_SUMMARY, { user: { name: 'Demo User' }, borrowed: [{ name: 'Arduino Uno', rfid: 'RFID-001' }], returned: [{ name: 'Multimeter', rfid: 'RFID-003' }] }), 14000);
+            setTimeout(() => setState(DisplayState.IDLE), 20000);
         }
 
-        // Start demo after 2 seconds
         setTimeout(runDemo, 2000);
     </script>
 </body>
