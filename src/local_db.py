@@ -162,7 +162,7 @@ class LocalDB:
         CREATE INDEX IF NOT EXISTS idx_auth_user ON auth_cache(user_id);
         CREATE INDEX IF NOT EXISTS idx_item_status ON item_cache(status);
         CREATE INDEX IF NOT EXISTS idx_item_holder ON item_cache(holder_id);
-        CREATE INDEX IF NOT EXISTS idx_item_cabinet ON item_cache(cabinet_id);
+        CREATE INDEX IF NOT EXISTS idx_item_location ON item_cache(location_id);
         CREATE INDEX IF NOT EXISTS idx_pending_created ON pending_sync(created_at);
         CREATE INDEX IF NOT EXISTS idx_pending_session ON pending_sync(session_id);
         CREATE INDEX IF NOT EXISTS idx_snapshots_session ON rfid_snapshots(session_id);
