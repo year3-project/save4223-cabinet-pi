@@ -7,12 +7,12 @@ from pathlib import Path
 # Default configuration
 DEFAULT_CONFIG = {
     # Server settings
-    'server_url': 'http://100.125.135.46:3000',
+    'server_url': 'http://save4223.isd-hub.com',
     'edge_secret': 'edge_device_secret_key',
     'cabinet_id': 1,
 
     # Database
-    'db_path': '/home/pi/cabinet/data/local.db',
+    'db_path': '/home/pi/save4223/save4223-cabinet-pi/data/local.db',
 
     # Hardware settings
     'servo_i2c_address': 0x40,
