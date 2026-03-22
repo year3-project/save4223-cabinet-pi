@@ -661,16 +661,24 @@ class SmartCabinet:
         # Wait for NFC card tap (10 second timeout)
         start_time = time.time()
         card_uid = None
+        card_attempts = []
 
         while time.time() - start_time < 10:
             card = self.hardware.read_nfc(timeout=0.5)
-            if card:
-                card_uid = card
-                break
+            if card and len(card) >= 4:  # Validate card UID length (at least 4 chars)
+                card_attempts.append(card)
+                # If we get the same card twice, accept it
+                if len(card_attempts) >= 2 and card_attempts[-1] == card_attempts[-2]:
+                    card_uid = card
+                    break
+                # Or accept immediately if looks like a valid card (numeric/string)
+                if len(card) >= 8:
+                    card_uid = card
+                    break
             time.sleep(0.1)
 
         if not card_uid:
-            logger.info("Pairing timeout - no card detected")
+            logger.info("Pairing timeout - no valid card detected")
             self._send_to_display({
                 'type': 'PAIRING_FAILURE',
                 'error': 'Timeout - no card detected',
@@ -687,9 +695,13 @@ class SmartCabinet:
 
         logger.info(f"Card detected for pairing: {card_uid[:10]}...")
 
+        # Clean token before sending to API
+        clean_token = self.pairing_handler._clean_hid_input(token)
+        logger.info(f"Attempting pairing with token: {clean_token}, card: {card_uid}")
+
         # Complete pairing via API
         result = self.pairing_handler.pair_with_qr(
-            qr_content=token,
+            qr_content=clean_token,
             card_uid=card_uid,
             cabinet_id=CONFIG['cabinet_id']
         )

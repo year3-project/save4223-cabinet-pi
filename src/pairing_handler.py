@@ -44,6 +44,18 @@ class PairingHandler:
         self.db = local_db
         self._pending_pairing: Optional[Dict[str, Any]] = None
 
+    def _clean_hid_input(self, content: str) -> str:
+        """Clean HID keyboard input by removing common noise patterns."""
+        # Remove common HID reader suffixes/prefixes
+        noise_patterns = ['MK', 'MOMKM', 'MJ', 'MO']
+        cleaned = content.strip().upper()
+        for pattern in noise_patterns:
+            if cleaned.endswith(pattern):
+                cleaned = cleaned[:-len(pattern)]
+            if cleaned.startswith(pattern):
+                cleaned = cleaned[len(pattern):]
+        return cleaned
+
     def extract_token_from_qr(self, qr_content: str) -> Optional[str]:
         """
         Extract pairing token from QR code content.
@@ -62,10 +74,12 @@ class PairingHandler:
         if not qr_content:
             return None
 
-        qr_content = qr_content.strip()
+        # Clean HID keyboard noise first
+        qr_content = self._clean_hid_input(qr_content)
 
-        # Try direct token match
+        # Try direct token match (8 alphanumeric chars)
         if self.QR_TOKEN_PATTERN.match(qr_content):
+            logger.debug(f"Token extracted directly: {qr_content}")
             return qr_content
 
         # Try URL format
@@ -75,8 +89,9 @@ class PairingHandler:
                 parsed = urlparse(qr_content)
                 params = parse_qs(parsed.query)
                 if 'token' in params:
-                    token = params['token'][0].upper()
+                    token = self._clean_hid_input(params['token'][0])
                     if self.QR_TOKEN_PATTERN.match(token):
+                        logger.debug(f"Token extracted from URL: {token}")
                         return token
             except Exception as e:
                 logger.warning(f"Failed to parse QR URL: {e}")
