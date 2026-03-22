@@ -26,28 +26,6 @@ from pairing_handler import PairingHandler, PairingResult
 from inventory_manager import InventoryManager
 from config import CONFIG
 
-# Hardware imports
-HARDWARE_MODE = CONFIG.get('hardware', {}).get('mode', 'mock')
-if HARDWARE_MODE == 'mock':
-    from hardware import MockHardware as HardwareController
-    logger.info("Using MockHardware (simulation mode)")
-else:
-    try:
-        from hardware import RaspberryPiHardware as HardwareController
-        logger.info("Using RaspberryPiHardware (real hardware)")
-    except ImportError as e:
-        logger.warning(f"RaspberryPiHardware not available: {e}, falling back to MockHardware")
-        from hardware import MockHardware as HardwareController
-
-# Display import (optional - falls back to console if nicegui not available)
-try:
-    sys.path.insert(0, str(Path(__file__).parent.parent / 'display'))
-    from display_gui import DisplayThread
-    DISPLAY_AVAILABLE = True
-except ImportError as e:
-    DISPLAY_AVAILABLE = False
-    logging.warning(f"Display not available: {e}")
-
 # Configure logging
 log_path = Path('/var/log/cabinet.log') if Path('/var/log').exists() and os.access('/var/log', os.W_OK) else Path(__file__).parent.parent / 'data' / 'cabinet.log'
 log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -60,6 +38,19 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+# Hardware import
+from hardware import RaspberryPiHardware as HardwareController
+logger.info("Using RaspberryPiHardware")
+
+# Display import (optional - falls back to console if nicegui not available)
+try:
+    sys.path.insert(0, str(Path(__file__).parent.parent / 'display'))
+    from display import DisplayThread
+    DISPLAY_AVAILABLE = True
+except ImportError as e:
+    DISPLAY_AVAILABLE = False
+    logger.warning(f"Display not available: {e}")
 
 
 class SmartCabinet:
@@ -82,7 +73,6 @@ class SmartCabinet:
 
         # Initialize components
         logger.info("Initializing Smart Cabinet...")
-        logger.info(f"Hardware mode: {HARDWARE_MODE}")
 
         self.state_machine = StateMachine()
         self.hardware = HardwareController()
@@ -702,7 +692,7 @@ class SmartCabinet:
     def get_stats(self) -> Dict[str, Any]:
         """Get system statistics."""
         return {
-            'hardware_mode': HARDWARE_MODE,
+            'hardware_mode': 'raspberry_pi',
             'online': self.sync_worker.is_online(),
             'current_state': self.state_machine.current_state.value,
             'current_user': self.current_user_name,

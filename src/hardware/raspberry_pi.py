@@ -28,15 +28,15 @@ logger = logging.getLogger(__name__)
 
 
 # Configuration constants
-SOLENOID_PINS = [27, 22, 10, 9]  # Lock A -> D
-DRAWER_SWITCH_PINS = [26, 19, 13, 6]  # Switches 1 -> 4
+SOLENOID_PINS = [27, 22, 10, 9]  # Lock A -> D  (ACTIVE_LOW=False: HIGH=unlock, LOW=lock)
+DRAWER_SWITCH_PINS = [26, 19, 6, 5]  # Switches 1 -> 4 (PUD_DOWN: HIGH=open)
 
 # WS2812B configuration
-LED_COUNT = 8        # Number of LED pixels
+LED_COUNT = 60       # Number of LED pixels
 LED_PIN = 18         # GPIO pin connected to the pixels (18 uses PWM!)
 LED_FREQ_HZ = 800000 # LED signal frequency in hertz (usually 800khz)
 LED_DMA = 10         # DMA channel to use for generating signal (try 10)
-LED_BRIGHTNESS = 255 # Set to 0 for darkest and 255 for brightest
+LED_BRIGHTNESS = 180 # ~70% brightness
 LED_INVERT = False   # True to invert the signal (when using NPN transistor level shift)
 LED_CHANNEL = 0      # set to '1' for GPIOs 13, 19, 41, 45 or 53
 
@@ -423,9 +423,9 @@ class RaspberryPiHardware(HardwareInterface):
             GPIO.setup(pin, GPIO.OUT)
             GPIO.output(pin, GPIO.LOW) # Ensure locked on start
 
-        # Setup drawer switch pins (External Pull-up to 3.3V)
+        # Setup drawer switch pins (internal pull-down: HIGH = drawer open)
         for pin in DRAWER_SWITCH_PINS:
-            GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_OFF)
+            GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
 
         # Initialize WS2812B Strip
         try:
@@ -599,41 +599,33 @@ class RaspberryPiHardware(HardwareInterface):
             logger.error(f"Failed to check drawer states: {e}")
             return False
 
-    def set_led(self, index: int, color: LEDColor, brightness: float = 1.0) -> None:
+    @staticmethod
+    def _to_ws_color(color) -> 'Color':
+        """Accept LEDColor enum or plain string and return rpi_ws281x Color."""
+        name = color.value if isinstance(color, LEDColor) else str(color).lower()
+        return {
+            'red':    Color(255, 0, 0),
+            'green':  Color(0, 255, 0),
+            'yellow': Color(255, 255, 0),
+            'blue':   Color(0, 0, 255),
+            'white':  Color(255, 255, 255),
+        }.get(name, Color(0, 0, 0))
+
+    def set_led(self, index: int, color, brightness: float = 1.0) -> None:
         """Set WS2812B LED color."""
         if not self._strip or index < 0 or index >= LED_COUNT:
             return
-
-        # Map LEDColor to rpi_ws281x Color
-        ws_color = Color(0, 0, 0)
-        if color == LEDColor.GREEN:
-            ws_color = Color(0, 255, 0)
-        elif color == LEDColor.RED:
-            ws_color = Color(255, 0, 0)
-        elif color == LEDColor.YELLOW:
-            ws_color = Color(255, 255, 0)
-        elif color == LEDColor.BLUE:
-            ws_color = Color(0, 0, 255)
-
         try:
-            self._strip.setPixelColor(index, ws_color)
+            self._strip.setPixelColor(index, self._to_ws_color(color))
             self._strip.show()
         except Exception as e:
             logger.error(f"Failed to set WS2812B LED {index}: {e}")
 
-    def set_all_leds(self, color: LEDColor, brightness: float = 1.0) -> None:
+    def set_all_leds(self, color, brightness: float = 1.0) -> None:
         """Set all WS2812B LEDs to same color."""
         if not self._strip:
             return
-
-        ws_color = Color(0, 0, 0)
-        if color == LEDColor.GREEN:
-            ws_color = Color(0, 255, 0)
-        elif color == LEDColor.RED:
-            ws_color = Color(255, 0, 0)
-        elif color == LEDColor.YELLOW:
-            ws_color = Color(255, 255, 0)
-
+        ws_color = self._to_ws_color(color)
         for i in range(LED_COUNT):
             self._strip.setPixelColor(i, ws_color)
         self._strip.show()

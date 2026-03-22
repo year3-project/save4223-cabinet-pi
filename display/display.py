@@ -47,6 +47,7 @@ class CabinetDisplayGUI:
 
         # UI elements (initialized in setup)
         self.state_indicator = None
+        self.status_title = None
         self.status_label = None
         self.user_card = None
         self.items_container = None
@@ -440,51 +441,86 @@ class DisplayThread:
             ui.timer(0.1, lambda: self.display.handle_message(message), once=True)
 
 
-# Standalone test
+# Standalone test with real hardware
 if __name__ == "__main__":
+    import sys
     import time
     import threading
 
     logging.basicConfig(level=logging.INFO)
 
+    # Add src/ to path for hardware imports
+    sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
+
+    from hardware import RaspberryPiHardware
+    hw = RaspberryPiHardware()
+    print("Using RaspberryPiHardware")
+
     display = CabinetDisplayGUI(fullscreen=False)
 
-    # Simulate some messages
-    def test_sequence():
-        time.sleep(2)
-        display.handle_message({
-            "type": "STATE_CHANGE",
-            "state": "AUTHENTICATING",
-            "message": "Reading card..."
-        })
+    def hardware_loop():
+        """Main hardware interaction loop."""
+        hw.initialize()
 
-        time.sleep(2)
-        display.handle_message({
-            "type": "AUTH_SUCCESS",
-            "user": {"name": "John Doe", "email": "john@example.com"},
-        })
+        try:
+            while True:
+                # LOCKED - wait for NFC card
+                display.handle_message({
+                    "type": "STATE_CHANGE",
+                    "state": "LOCKED",
+                    "message": "Tap card to unlock"
+                })
 
-        time.sleep(3)
-        display.handle_message({
-            "type": "SESSION_SUMMARY",
-            "summary": {
-                "borrowed": [
-                    {"name": "Arduino Uno"},
-                    {"name": "Multimeter"}
-                ],
-                "returned": [
-                    {"name": "Soldering Iron"}
-                ]
-            },
-            "user_name": "John Doe"
-        })
+                print("Waiting for NFC card...")
+                card_uid = hw.read_nfc(timeout=30.0)
 
-        time.sleep(4)
-        display.handle_message({
-            "type": "STATE_CHANGE",
-            "state": "LOCKED",
-            "message": "Tap card to unlock"
-        })
+                if not card_uid:
+                    print("No card detected (timeout), retrying...")
+                    continue
 
-    threading.Thread(target=test_sequence, daemon=True).start()
+                print(f"Card detected: {card_uid}")
+
+                # AUTHENTICATING
+                display.handle_message({
+                    "type": "STATE_CHANGE",
+                    "state": "AUTHENTICATING",
+                    "message": f"Reading card {card_uid}..."
+                })
+                time.sleep(1)
+
+                # UNLOCKED
+                display.handle_message({
+                    "type": "AUTH_SUCCESS",
+                    "user": {"name": f"Card {card_uid}", "email": card_uid}
+                })
+                time.sleep(2)
+
+                # SCANNING - read RFID inventory
+                display.handle_message({
+                    "type": "STATE_CHANGE",
+                    "state": "SCANNING",
+                    "message": "Scanning inventory..."
+                })
+
+                print("Scanning RFID tags...")
+                tags = hw.read_rfid_tags()
+                print(f"Found {len(tags)} tags: {tags}")
+
+                # SUMMARY
+                display.handle_message({
+                    "type": "SESSION_SUMMARY",
+                    "summary": {
+                        "borrowed": [{"name": t} for t in tags],
+                        "returned": []
+                    },
+                    "user_name": f"Card {card_uid}"
+                })
+                time.sleep(5)
+
+        except KeyboardInterrupt:
+            pass
+        finally:
+            hw.cleanup()
+
+    threading.Thread(target=hardware_loop, daemon=True).start()
     display.run()
