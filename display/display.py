@@ -159,23 +159,23 @@ class CabinetDisplayGUI:
                     }
                     .drawer-handle { width: 50%; height: 6px; background: #333; border-radius: 3px; }
                     .drawer-indicator {
-                        position: absolute; top: 6px; right: 8px;
-                        width: 12px; height: 12px; border-radius: 50%;
-                        background: var(--color-success); border: 2px solid rgba(255,255,255,0.5);
+                        position: absolute; top: 4px; right: 6px;
+                        width: 20px; height: 20px; border-radius: 50%;
+                        background: var(--color-success); border: 3px solid rgba(255,255,255,0.8);
                         transition: all 0.3s ease; opacity: 0;
                     }
                     .drawer-indicator.open {
                         opacity: 1; background: var(--color-error);
-                        box-shadow: 0 0 8px var(--color-error);
-                        animation: pulse-warning 1s infinite;
+                        box-shadow: 0 0 12px var(--color-error), 0 0 20px var(--color-error);
+                        animation: pulse-warning 0.8s infinite;
                     }
                     .drawer-number {
                         position: absolute; bottom: 4px; left: 6px;
                         font-size: 10px; font-weight: 600; color: rgba(0,0,0,0.3);
                     }
                     @keyframes pulse-warning {
-                        0%, 100% { opacity: 1; box-shadow: 0 0 8px var(--color-error); }
-                        50% { opacity: 0.7; box-shadow: 0 0 16px var(--color-error); }
+                        0%, 100% { opacity: 1; box-shadow: 0 0 12px var(--color-error), 0 0 20px var(--color-error); transform: scale(1); }
+                        50% { opacity: 0.8; box-shadow: 0 0 20px var(--color-error), 0 0 30px var(--color-error); transform: scale(1.1); }
                     }
                     .scanning-dots { display: flex; gap: 6px; margin-top: 15px; }
                     .scanning-dot {

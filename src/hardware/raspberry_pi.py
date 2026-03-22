@@ -632,15 +632,24 @@ class RaspberryPiHardware(HardwareInterface):
 
     def cleanup(self) -> None:
         """Cleanup resources."""
+        logger.info("Starting hardware cleanup...")
+
+        # Lock all drawers first (ensure solenoids are de-energized)
+        self.lock_all()
+
+        # Close readers
         if self._nfc_reader:
             self._nfc_reader.close()
 
         if self._rfid_reader:
             self._rfid_reader.disconnect()
 
+        # Turn off LEDs and give time for signal to propagate
         if self._strip:
             self.set_all_leds(LEDColor.OFF)
+            time.sleep(0.1)  # Allow LED strip to update
 
+        # Clean up GPIO
         if RPI_AVAILABLE:
             GPIO.cleanup()
 

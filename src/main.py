@@ -299,12 +299,19 @@ class SmartCabinet:
 
     def _authenticate(self, card_uid: str) -> Dict[str, Any]:
         """
-        Authenticate card with API or local cache.
+        Authenticate card with local cache first, then remote API.
 
         Returns:
             Authentication result dict
         """
-        # Try API first if online
+        # Check local cache first (fast path)
+        cached = self.local_db.get_cached_auth(card_uid)
+        if cached:
+            logger.info("Using cached authentication (local)")
+            cached['source'] = 'cache'
+            return cached
+
+        # Not in cache - try API if online
         if self.sync_worker.is_online():
             try:
                 result = self.api.authorize(card_uid, CONFIG['cabinet_id'])
@@ -316,14 +323,7 @@ class SmartCabinet:
                 result['source'] = 'server'
                 return result
             except APIError as e:
-                logger.warning(f"API auth failed: {e}, falling back to cache")
-
-        # Fallback to local cache
-        cached = self.local_db.get_cached_auth(card_uid)
-        if cached:
-            logger.info("Using cached authentication")
-            cached['source'] = 'cache'
-            return cached
+                logger.warning(f"API auth failed: {e}")
 
         return {'authorized': False, 'reason': 'Card not registered'}
 
@@ -368,11 +368,18 @@ class SmartCabinet:
             if card == self.current_card_uid:
                 if self.hardware.are_all_drawers_closed():
                     logger.info("Close command received, all drawers closed")
+                    self._send_to_display({
+                        'type': 'STATE_CHANGE',
+                        'state': 'RFID_SCANNING',
+                        'message': 'Closing session, scanning inventory...'
+                    })
                     self.state_machine.transition(SystemState.SCANNING)
                     return
                 else:
                     logger.info("Please close all drawers first")
                     self.hardware.beep_warning()
+                    # Red blink warning (matches test_hardware.py)
+                    self.hardware.led_pattern('blink', 'red', duration=0.6)
                     self._send_to_display({
                         'type': 'WARNING',
                         'message': 'Please close all drawers first'
@@ -400,8 +407,9 @@ class SmartCabinet:
     def _on_scanning(self, context=None):
         """Handle SCANNING state entry (end of session)."""
         logger.info("State: SCANNING - Finalizing session")
-        self.hardware.set_all_leds('yellow')
         self.hardware.lock_all()
+        # Blue chase during RFID scan (matches test_hardware.py)
+        self.hardware.led_pattern('chase', 'blue', duration=2.0)
 
         # Capture end snapshot
         logger.info("Capturing end RFID snapshot...")
