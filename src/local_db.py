@@ -40,17 +40,29 @@ class LocalDB:
             expires_at TIMESTAMP
         );
 
+        -- Item types cache (tool categories/SKUs)
+        CREATE TABLE IF NOT EXISTS item_types (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
+            name_cn TEXT,
+            category TEXT,
+            description TEXT,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
         -- Item state cache (knows which user holds each item)
         CREATE TABLE IF NOT EXISTS item_cache (
             rfid_tag TEXT PRIMARY KEY,
             item_id TEXT NOT NULL,
             name TEXT,
+            item_type_id INTEGER,
+            item_type_name TEXT,
             description TEXT,
             status TEXT DEFAULT 'AVAILABLE',
             holder_id TEXT,
             holder_name TEXT,
             due_at TIMESTAMP,
-            cabinet_id INTEGER,
+            location_id INTEGER,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
 
@@ -523,33 +535,65 @@ class LocalDB:
     # Item Cache Methods
     # =========================================================================
 
+    def update_item_type(self, id: int, name: str, name_cn: str = None,
+                        category: str = None, description: str = None):
+        """Update or insert item type."""
+        with self._conn:
+            self._conn.execute('''
+                INSERT INTO item_types (id, name, name_cn, category, description, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    name = excluded.name,
+                    name_cn = excluded.name_cn,
+                    category = excluded.category,
+                    description = excluded.description,
+                    updated_at = excluded.updated_at
+            ''', (id, name, name_cn, category, description, datetime.now()))
+
+    def get_item_type(self, id: int) -> Optional[Dict[str, Any]]:
+        """Get item type by ID."""
+        row = self._conn.execute(
+            'SELECT * FROM item_types WHERE id = ?', (id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def get_all_item_types(self) -> List[Dict[str, Any]]:
+        """Get all item types."""
+        rows = self._conn.execute('SELECT * FROM item_types').fetchall()
+        return [dict(row) for row in rows]
+
     def update_item_cache(self, rfid_tag: str, item_id: str, name: str,
                          status: str = 'AVAILABLE', holder_id: Optional[str] = None,
-                         description: Optional[str] = None, cabinet_id: Optional[int] = None):
+                         description: Optional[str] = None, location_id: Optional[int] = None,
+                         item_type_id: Optional[int] = None, item_type_name: Optional[str] = None):
         """Update or insert item cache."""
         with self._conn:
             self._conn.execute('''
                 INSERT INTO item_cache
-                (rfid_tag, item_id, name, description, status, holder_id, cabinet_id, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (rfid_tag, item_id, name, item_type_id, item_type_name, description,
+                 status, holder_id, location_id, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(rfid_tag) DO UPDATE SET
                     item_id = excluded.item_id,
                     name = excluded.name,
+                    item_type_id = excluded.item_type_id,
+                    item_type_name = excluded.item_type_name,
                     description = excluded.description,
                     status = excluded.status,
                     holder_id = excluded.holder_id,
-                    cabinet_id = excluded.cabinet_id,
+                    location_id = excluded.location_id,
                     updated_at = excluded.updated_at
-            ''', (rfid_tag, item_id, name, description, status, holder_id, cabinet_id, datetime.now()))
+            ''', (rfid_tag, item_id, name, item_type_id, item_type_name,
+                  description, status, holder_id, location_id, datetime.now()))
 
-    def get_all_items_in_cabinet(self, cabinet_id: Optional[int] = None) -> List[Dict[str, Any]]:
+    def get_all_items_in_cabinet(self, location_id: Optional[int] = None) -> List[Dict[str, Any]]:
         """Get all items currently in cabinet (AVAILABLE status)."""
         query = 'SELECT * FROM item_cache WHERE status = ?'
         params = ['AVAILABLE']
 
-        if cabinet_id:
-            query += ' AND cabinet_id = ?'
-            params.append(cabinet_id)
+        if location_id:
+            query += ' AND location_id = ?'
+            params.append(location_id)
 
         rows = self._conn.execute(query, params).fetchall()
         return [dict(row) for row in rows]

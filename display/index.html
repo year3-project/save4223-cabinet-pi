@@ -1,294 +1,629 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Smart Cabinet Display</title>
+    <title>Save4223 - Smart Cabinet</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
+
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', sans-serif;
-            background: #0a0a0a;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
             color: #fff;
             height: 100vh;
             overflow: hidden;
             display: flex;
-            flex-direction: column;
         }
-        .header {
-            background: linear-gradient(90deg, #1a1a2e 0%, #16213e 100%);
-            padding: 20px 40px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            border-bottom: 2px solid #0f3460;
-        }
-        .logo { display: flex; align-items: center; gap: 15px; }
-        .logo-icon {
-            width: 50px; height: 50px;
-            background: #e94560;
-            border-radius: 12px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 28px;
-        }
-        .logo-text h1 { font-size: 28px; font-weight: 700; color: #fff; letter-spacing: 1px; }
-        .logo-text p { font-size: 14px; color: #8892b0; }
-        .status-bar { display: flex; align-items: center; gap: 30px; }
-        .status-item { display: flex; align-items: center; gap: 10px; font-size: 16px; color: #8892b0; }
-        .status-indicator {
-            width: 12px; height: 12px;
-            border-radius: 50%;
-            background: #e94560;
-            animation: pulse 2s infinite;
-        }
-        .status-indicator.online { background: #00d9ff; box-shadow: 0 0 10px #00d9ff; }
-        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
-        .clock { font-size: 24px; font-weight: 600; color: #fff; font-variant-numeric: tabular-nums; }
-        .main { flex: 1; display: flex; padding: 40px; gap: 40px; }
-        .main-display { flex: 2; display: flex; flex-direction: column; gap: 30px; }
-        .state-card {
-            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-            border-radius: 20px;
-            padding: 40px;
-            border: 2px solid #0f3460;
+
+        /* Left side - Cabinet visualization */
+        .cabinet-panel {
             flex: 1;
             display: flex;
             flex-direction: column;
-            justify-content: center;
             align-items: center;
-            text-align: center;
-            transition: all 0.5s ease;
+            justify-content: center;
+            padding: 40px;
+            background: rgba(0, 0, 0, 0.2);
         }
-        .state-card.locked { border-color: #e94560; box-shadow: 0 0 30px rgba(233, 69, 96, 0.3); }
-        .state-card.unlocked { border-color: #00d9ff; box-shadow: 0 0 30px rgba(0, 217, 255, 0.3); }
-        .state-card.processing { border-color: #ffd700; box-shadow: 0 0 30px rgba(255, 215, 0, 0.3); }
-        .state-icon { font-size: 120px; margin-bottom: 30px; }
-        .state-title { font-size: 48px; font-weight: 700; margin-bottom: 15px; }
-        .state-message { font-size: 24px; color: #8892b0; max-width: 600px; }
-        .user-info {
-            margin-top: 30px;
-            padding: 20px 40px;
-            background: rgba(0, 217, 255, 0.1);
-            border-radius: 15px;
-            border: 1px solid #00d9ff;
+
+        .cabinet-title {
+            font-size: 24px;
+            font-weight: 600;
+            color: #8892b0;
+            margin-bottom: 30px;
+            text-transform: uppercase;
+            letter-spacing: 2px;
         }
-        .user-name { font-size: 36px; font-weight: 700; color: #00d9ff; }
-        .user-email { font-size: 18px; color: #8892b0; margin-top: 5px; }
-        .side-panel { flex: 1; display: flex; flex-direction: column; gap: 20px; }
-        .panel-card { background: #1a1a2e; border-radius: 15px; padding: 25px; border: 1px solid #0f3460; }
-        .panel-card h3 { font-size: 18px; color: #8892b0; margin-bottom: 15px; text-transform: uppercase; letter-spacing: 1px; }
-        .led-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-top: 10px; }
-        .led-item {
-            aspect-ratio: 1;
-            border-radius: 12px;
+
+        .cabinet-visualization {
+            position: relative;
+            width: 280px;
+        }
+
+        /* Cabinet top */
+        .cabinet-top {
+            width: 100%;
+            height: 30px;
+            background: linear-gradient(180deg, #d4a574 0%, #c4956a 100%);
+            border-radius: 8px 8px 0 0;
+            margin-bottom: 4px;
+        }
+
+        /* Cabinet body with drawers */
+        .cabinet-body {
+            display: flex;
+            gap: 4px;
+            background: #2d2d3a;
+            padding: 8px;
+            border-radius: 0 0 8px 8px;
+        }
+
+        /* Left column - 3 drawers */
+        .drawer-column-left {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        /* Right column - 1 drawer */
+        .drawer-column-right {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-end;
+        }
+
+        .drawer {
+            position: relative;
+            height: 80px;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s ease;
+            cursor: default;
+        }
+
+        .drawer.left {
+            background: linear-gradient(135deg, #7ec8e3 0%, #6bb8d3 100%);
+        }
+
+        .drawer.right {
+            background: linear-gradient(135deg, #d4a5d4 0%, #c495c4 100%);
+            height: 248px;
+        }
+
+        /* Drawer handle */
+        .drawer-handle {
+            width: 60%;
+            height: 8px;
+            background: #333;
+            border-radius: 4px;
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+        }
+
+        /* Status indicator light */
+        .drawer-indicator {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: transparent;
+            transition: all 0.3s ease;
+        }
+
+        .drawer-indicator.closed {
+            background: transparent;
+        }
+
+        .drawer-indicator.open {
+            background: #ff4757;
+            box-shadow: 0 0 10px #ff4757, 0 0 20px #ff4757;
+            animation: pulse-warning 1s infinite;
+        }
+
+        @keyframes pulse-warning {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .drawer-number {
+            position: absolute;
+            bottom: 8px;
+            left: 8px;
+            font-size: 12px;
+            font-weight: 600;
+            color: rgba(0, 0, 0, 0.3);
+        }
+
+        /* Right side - Status panel */
+        .status-panel {
+            flex: 1.2;
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            font-size: 14px;
-            font-weight: 600;
-            transition: all 0.3s ease;
+            padding: 60px;
         }
-        .led-item.locked { background: #2d1b1b; color: #e94560; border: 2px solid #e94560; }
-        .led-item.unlocked { background: #1b2d2d; color: #00d9ff; border: 2px solid #00d9ff; box-shadow: 0 0 15px rgba(0, 217, 255, 0.5); }
-        .led-number { font-size: 24px; margin-bottom: 5px; }
-        .transaction-list { max-height: 200px; overflow-y: auto; }
-        .transaction-item { display: flex; align-items: center; padding: 12px; margin-bottom: 10px; border-radius: 10px; font-size: 16px; }
-        .transaction-item.borrow { background: rgba(233, 69, 96, 0.1); border-left: 4px solid #e94560; }
-        .transaction-item.return { background: rgba(0, 217, 255, 0.1); border-left: 4px solid #00d9ff; }
-        .transaction-icon { font-size: 24px; margin-right: 15px; }
-        .transaction-name { flex: 1; font-weight: 500; }
-        .transaction-tag { font-size: 12px; color: #8892b0; font-family: monospace; }
-        .empty-state { text-align: center; padding: 40px; color: #4a5568; }
-        .empty-state-icon { font-size: 48px; margin-bottom: 15px; }
-        @keyframes slideIn { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
-        .animate-in { animation: slideIn 0.5s ease; }
+
+        .welcome-title {
+            font-size: 56px;
+            font-weight: 700;
+            background: linear-gradient(135deg, #00d9ff 0%, #00ff88 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 40px;
+            text-align: center;
+        }
+
+        .status-card {
+            background: rgba(255, 255, 255, 0.05);
+            border: 2px solid rgba(255, 255, 255, 0.1);
+            border-radius: 20px;
+            padding: 40px 60px;
+            text-align: center;
+            max-width: 500px;
+            width: 100%;
+            transition: all 0.5s ease;
+        }
+
+        .status-card.success {
+            border-color: #00ff88;
+            box-shadow: 0 0 30px rgba(0, 255, 136, 0.2);
+        }
+
+        .status-card.warning {
+            border-color: #ff4757;
+            box-shadow: 0 0 30px rgba(255, 71, 87, 0.2);
+        }
+
+        .status-card.processing {
+            border-color: #ffd700;
+            box-shadow: 0 0 30px rgba(255, 215, 0, 0.2);
+        }
+
+        .status-icon {
+            font-size: 64px;
+            margin-bottom: 20px;
+        }
+
+        .status-message {
+            font-size: 24px;
+            color: #e0e0e0;
+            line-height: 1.5;
+        }
+
+        /* User info display */
+        .user-info {
+            margin-top: 30px;
+            padding: 20px 30px;
+            background: rgba(0, 217, 255, 0.1);
+            border-radius: 12px;
+            border: 1px solid rgba(0, 217, 255, 0.3);
+            display: none;
+        }
+
+        .user-info.visible {
+            display: block;
+        }
+
+        .user-name {
+            font-size: 28px;
+            font-weight: 600;
+            color: #00d9ff;
+        }
+
+        /* Transaction summary */
+        .transaction-summary {
+            margin-top: 30px;
+            text-align: left;
+            display: none;
+        }
+
+        .transaction-summary.visible {
+            display: block;
+        }
+
+        .transaction-section {
+            margin-bottom: 20px;
+        }
+
+        .transaction-section h4 {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .transaction-section.borrowed h4 {
+            color: #ff6b6b;
+        }
+
+        .transaction-section.returned h4 {
+            color: #51cf66;
+        }
+
+        .transaction-item {
+            padding: 10px 15px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .transaction-item .icon {
+            font-size: 20px;
+        }
+
+        .transaction-item .name {
+            flex: 1;
+            font-size: 16px;
+        }
+
+        /* Scanning animation */
+        .scanning-animation {
+            display: none;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            margin-top: 20px;
+        }
+
+        .scanning-animation.visible {
+            display: flex;
+        }
+
+        .scanning-dot {
+            width: 12px;
+            height: 12px;
+            background: #ffd700;
+            border-radius: 50%;
+            animation: scanning-pulse 1.4s infinite ease-in-out;
+        }
+
+        .scanning-dot:nth-child(1) { animation-delay: 0s; }
+        .scanning-dot:nth-child(2) { animation-delay: 0.2s; }
+        .scanning-dot:nth-child(3) { animation-delay: 0.4s; }
+
+        @keyframes scanning-pulse {
+            0%, 80%, 100% { transform: scale(0.6); opacity: 0.5; }
+            40% { transform: scale(1); opacity: 1; }
+        }
+
+        /* Warning message */
+        .warning-details {
+            margin-top: 15px;
+            padding: 15px;
+            background: rgba(255, 71, 87, 0.1);
+            border-radius: 8px;
+            font-size: 16px;
+            color: #ff6b6b;
+            display: none;
+        }
+
+        .warning-details.visible {
+            display: block;
+        }
+
+        /* Footer */
+        .footer {
+            position: fixed;
+            bottom: 20px;
+            right: 40px;
+            font-size: 14px;
+            color: #4a5568;
+        }
     </style>
 </head>
 <body>
-    <header class="header">
-        <div class="logo">
-            <div class="logo-icon">🔧</div>
-            <div class="logo-text">
-                <h1>Smart Cabinet</h1>
-                <p>智能工具管理柜</p>
-            </div>
-        </div>
-        <div class="status-bar">
-            <div class="status-item">
-                <div class="status-indicator online" id="serverStatus"></div>
-                <span>Server Online</span>
-            </div>
-            <div class="status-item">
-                <div class="status-indicator online" id="syncStatus"></div>
-                <span>Sync Active</span>
-            </div>
-            <div class="clock" id="clock">00:00:00</div>
-        </div>
-    </header>
+    <!-- Left Panel: Cabinet Visualization -->
+    <div class="cabinet-panel">
+        <div class="cabinet-title">Cabinet Status</div>
+        <div class="cabinet-visualization">
+            <!-- Cabinet Top (wood grain) -->
+            <div class="cabinet-top"></div>
 
-    <main class="main">
-        <div class="main-display">
-            <div class="state-card locked" id="stateCard">
-                <div class="state-icon" id="stateIcon">🔒</div>
-                <div class="state-title" id="stateTitle">系统已锁定</div>
-                <div class="state-message" id="stateMessage">
-                    请将 NFC 卡靠近读卡器，或扫描屏幕上的二维码
-                </div>
-                <div class="user-info" id="userInfo" style="display: none;">
-                    <div class="user-name" id="userName">--</div>
-                    <div class="user-email" id="userEmail">--</div>
-                </div>
-            </div>
-        </div>
-
-        <div class="side-panel">
-            <div class="panel-card">
-                <h3>🔴 抽屉状态 LED</h3>
-                <div class="led-grid" id="ledGrid">
-                    <div class="led-item locked"><div class="led-number">1</div><div>Locked</div></div>
-                    <div class="led-item locked"><div class="led-number">2</div><div>Locked</div></div>
-                    <div class="led-item locked"><div class="led-number">3</div><div>Locked</div></div>
-                    <div class="led-item locked"><div class="led-number">4</div><div>Locked</div></div>
-                </div>
-            </div>
-
-            <div class="panel-card">
-                <h3>📋 当前会话</h3>
-                <div id="sessionInfo">
-                    <div class="empty-state">
-                        <div class="empty-state-icon">📭</div>
-                        <p>暂无活动会话</p>
+            <!-- Cabinet Body -->
+            <div class="cabinet-body">
+                <!-- Left Column: 3 Drawers -->
+                <div class="drawer-column-left">
+                    <div class="drawer left" id="drawer-1">
+                        <div class="drawer-indicator closed" id="indicator-1"></div>
+                        <div class="drawer-handle"></div>
+                        <div class="drawer-number">1</div>
+                    </div>
+                    <div class="drawer left" id="drawer-2">
+                        <div class="drawer-indicator closed" id="indicator-2"></div>
+                        <div class="drawer-handle"></div>
+                        <div class="drawer-number">2</div>
+                    </div>
+                    <div class="drawer left" id="drawer-3">
+                        <div class="drawer-indicator closed" id="indicator-3"></div>
+                        <div class="drawer-handle"></div>
+                        <div class="drawer-number">3</div>
                     </div>
                 </div>
-            </div>
 
-            <div class="panel-card">
-                <h3>🔄 本次操作</h3>
-                <div class="transaction-list" id="transactionList">
-                    <div class="empty-state">
-                        <div class="empty-state-icon">📦</div>
-                        <p>等待操作...</p>
+                <!-- Right Column: 1 Drawer -->
+                <div class="drawer-column-right">
+                    <div class="drawer right" id="drawer-4">
+                        <div class="drawer-indicator closed" id="indicator-4"></div>
+                        <div class="drawer-handle"></div>
+                        <div class="drawer-number">4</div>
                     </div>
                 </div>
             </div>
         </div>
-    </main>
+    </div>
+
+    <!-- Right Panel: Status Display -->
+    <div class="status-panel">
+        <h1 class="welcome-title">Welcome to Save4223</h1>
+
+        <div class="status-card" id="statusCard">
+            <div class="status-icon" id="statusIcon">💳</div>
+            <div class="status-message" id="statusMessage">
+                Tap your card to access the cabinet
+            </div>
+
+            <div class="scanning-animation" id="scanningAnimation">
+                <div class="scanning-dot"></div>
+                <div class="scanning-dot"></div>
+                <div class="scanning-dot"></div>
+            </div>
+
+            <div class="warning-details" id="warningDetails"></div>
+        </div>
+
+        <div class="user-info" id="userInfo">
+            <div class="user-name" id="userName">--</div>
+        </div>
+
+        <div class="transaction-summary" id="transactionSummary">
+            <div class="transaction-section borrowed" id="borrowedSection">
+                <h4>📤 Borrowed</h4>
+                <div id="borrowedList"></div>
+            </div>
+            <div class="transaction-section returned" id="returnedSection">
+                <h4>📥 Returned</h4>
+                <div id="returnedList"></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="footer" id="footer">Save4223 Smart Cabinet</div>
 
     <script>
-        function updateClock() {
-            const now = new Date();
-            document.getElementById('clock').textContent = now.toLocaleTimeString('zh-CN', { hour12: false });
-        }
-        setInterval(updateClock, 1000);
-        updateClock();
+        // State management
+        const DisplayState = {
+            IDLE: 'IDLE',
+            LOGIN_SUCCESS: 'LOGIN_SUCCESS',
+            CHECKOUT_WARNING: 'CHECKOUT_WARNING',
+            RFID_SCANNING: 'RFID_SCANNING',
+            SESSION_SUMMARY: 'SESSION_SUMMARY',
+            ERROR: 'ERROR'
+        };
 
-        function updateState(newState, message, user = null) {
-            const card = document.getElementById('stateCard');
-            const icon = document.getElementById('stateIcon');
-            const title = document.getElementById('stateTitle');
-            const msg = document.getElementById('stateMessage');
-            const userInfo = document.getElementById('userInfo');
+        let currentState = DisplayState.IDLE;
+        let currentUser = null;
+        let drawerStates = { 1: false, 2: false, 3: false, 4: false }; // false = closed, true = open
 
-            card.classList.remove('locked', 'unlocked', 'processing');
+        // DOM elements
+        const statusCard = document.getElementById('statusCard');
+        const statusIcon = document.getElementById('statusIcon');
+        const statusMessage = document.getElementById('statusMessage');
+        const userInfo = document.getElementById('userInfo');
+        const userName = document.getElementById('userName');
+        const scanningAnimation = document.getElementById('scanningAnimation');
+        const warningDetails = document.getElementById('warningDetails');
+        const transactionSummary = document.getElementById('transactionSummary');
+        const borrowedList = document.getElementById('borrowedList');
+        const returnedList = document.getElementById('returnedList');
 
-            switch(newState) {
-                case 'LOCKED':
-                    card.classList.add('locked');
-                    icon.textContent = '🔒';
-                    title.textContent = '系统已锁定';
-                    msg.textContent = message || '请将 NFC 卡靠近读卡器';
-                    userInfo.style.display = 'none';
-                    updateLEDs('locked');
-                    break;
-                case 'AUTHENTICATING':
-                    card.classList.add('processing');
-                    icon.textContent = '🔄';
-                    title.textContent = '验证中...';
-                    msg.textContent = message || '正在验证卡片信息';
-                    userInfo.style.display = 'none';
-                    break;
-                case 'UNLOCKED':
-                    card.classList.add('unlocked');
-                    icon.textContent = '🔓';
-                    title.textContent = '已解锁';
-                    msg.textContent = message || '请取/还工具，完成后再次拍卡';
-                    if (user) {
-                        document.getElementById('userName').textContent = user.name || user.user_name || 'Unknown';
-                        document.getElementById('userEmail').textContent = user.email || '';
-                        userInfo.style.display = 'block';
-                    }
-                    updateLEDs('unlocked');
-                    break;
-                case 'SCANNING':
-                    card.classList.add('processing');
-                    icon.textContent = '📡';
-                    title.textContent = '正在扫描...';
-                    msg.textContent = message || '请稍候，正在核对库存';
-                    updateLEDs('locked');
-                    break;
-                case 'ERROR':
-                    card.classList.add('locked');
-                    icon.textContent = '❌';
-                    title.textContent = '错误';
-                    msg.textContent = message || '操作失败，请重试';
-                    break;
-            }
-            card.classList.add('animate-in');
-            setTimeout(() => card.classList.remove('animate-in'), 500);
-        }
-
-        function updateLEDs(status) {
-            document.querySelectorAll('.led-item').forEach(led => {
-                led.classList.remove('locked', 'unlocked');
-                led.classList.add(status);
-                led.querySelector('div:last-child').textContent = status === 'locked' ? 'Locked' : 'Open';
-            });
-        }
-
-        function updateTransactions(borrowed, returned) {
-            const list = document.getElementById('transactionList');
-            if (borrowed.length === 0 && returned.length === 0) {
-                list.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📦</div><p>等待操作...</p></div>';
-                return;
-            }
-            let html = '';
-            borrowed.forEach(item => {
-                html += `<div class="transaction-item borrow"><div class="transaction-icon">📤</div><div class="transaction-name">${item.name || item.rfid}</div><div class="transaction-tag">${item.rfid}</div></div>`;
-            });
-            returned.forEach(item => {
-                html += `<div class="transaction-item return"><div class="transaction-icon">📥</div><div class="transaction-name">${item.name || item.rfid}</div><div class="transaction-tag">${item.rfid}</div></div>`;
-            });
-            list.innerHTML = html;
-        }
-
-        window.cabinetDisplay = { setState: updateState, setTransactions: updateTransactions, setLEDs: updateLEDs };
-
-        function demo() {
-            const states = [
-                { state: 'LOCKED', delay: 3000 },
-                { state: 'AUTHENTICATING', delay: 2000 },
-                { state: 'UNLOCKED', delay: 5000, user: { name: '张三', email: 'zhangsan@example.com' } },
-                { state: 'SCANNING', delay: 3000 },
-                { state: 'LOCKED', delay: 3000 }
-            ];
-            let index = 0;
-            function next() {
-                const s = states[index];
-                updateState(s.state, null, s.user);
-                if (s.state === 'SCANNING') {
-                    updateTransactions([{ name: 'Arduino Uno', rfid: 'RFID-001' }], [{ name: '万用表', rfid: 'RFID-003' }]);
-                } else if (s.state === 'LOCKED') {
-                    updateTransactions([], []);
+        // Update drawer indicators
+        function updateDrawerIndicators(states) {
+            drawerStates = states || drawerStates;
+            for (let i = 1; i <= 4; i++) {
+                const indicator = document.getElementById(`indicator-${i}`);
+                if (drawerStates[i]) {
+                    indicator.classList.remove('closed');
+                    indicator.classList.add('open');
+                } else {
+                    indicator.classList.remove('open');
+                    indicator.classList.add('closed');
                 }
-                index = (index + 1) % states.length;
-                setTimeout(next, s.delay);
             }
-            next();
         }
-        setTimeout(demo, 2000);
+
+        // Check if any drawer is open
+        function anyDrawerOpen() {
+            return Object.values(drawerStates).some(open => open);
+        }
+
+        // Set display state
+        function setState(newState, data = {}) {
+            currentState = newState;
+
+            // Reset visibility
+            userInfo.classList.remove('visible');
+            transactionSummary.classList.remove('visible');
+            scanningAnimation.classList.remove('visible');
+            warningDetails.classList.remove('visible');
+            statusCard.classList.remove('success', 'warning', 'processing');
+
+            switch (newState) {
+                case DisplayState.IDLE:
+                    statusIcon.textContent = '💳';
+                    statusMessage.textContent = 'Tap your card to access the cabinet';
+                    break;
+
+                case DisplayState.LOGIN_SUCCESS:
+                    statusCard.classList.add('success');
+                    statusIcon.textContent = '✅';
+                    statusMessage.textContent = 'Login successful, you may now open the cabinet';
+                    if (data.user) {
+                        currentUser = data.user;
+                        userName.textContent = data.user.name || data.user.user_name || 'User';
+                        userInfo.classList.add('visible');
+                    }
+                    break;
+
+                case DisplayState.CHECKOUT_WARNING:
+                    statusCard.classList.add('warning');
+                    statusIcon.textContent = '⚠️';
+                    statusMessage.textContent = 'Please close all drawers to complete checkout';
+                    if (data.openDrawers && data.openDrawers.length > 0) {
+                        warningDetails.textContent = `Open drawers: ${data.openDrawers.join(', ')}`;
+                        warningDetails.classList.add('visible');
+                    }
+                    break;
+
+                case DisplayState.RFID_SCANNING:
+                    statusCard.classList.add('processing');
+                    statusIcon.textContent = '📡';
+                    statusMessage.textContent = 'RFID Scanning in progress';
+                    scanningAnimation.classList.add('visible');
+                    break;
+
+                case DisplayState.SESSION_SUMMARY:
+                    statusCard.classList.add('success');
+                    statusIcon.textContent = '✓';
+                    statusMessage.textContent = 'Session complete!';
+                    if (data.user) {
+                        userName.textContent = data.user.name || 'User';
+                        userInfo.classList.add('visible');
+                    }
+                    if (data.borrowed || data.returned) {
+                        showTransactions(data.borrowed || [], data.returned || []);
+                        transactionSummary.classList.add('visible');
+                    }
+                    break;
+
+                case DisplayState.ERROR:
+                    statusCard.classList.add('warning');
+                    statusIcon.textContent = '❌';
+                    statusMessage.textContent = data.message || 'An error occurred';
+                    break;
+            }
+        }
+
+        // Show transactions
+        function showTransactions(borrowed, returned) {
+            // Borrowed items
+            if (borrowed.length > 0) {
+                borrowedList.innerHTML = borrowed.map(item =>
+                    `<div class="transaction-item">
+                        <span class="icon">📤</span>
+                        <span class="name">${item.name || item.rfid}</span>
+                    </div>`
+                ).join('');
+                document.getElementById('borrowedSection').style.display = 'block';
+            } else {
+                document.getElementById('borrowedSection').style.display = 'none';
+            }
+
+            // Returned items
+            if (returned.length > 0) {
+                returnedList.innerHTML = returned.map(item =>
+                    `<div class="transaction-item">
+                        <span class="icon">📥</span>
+                        <span class="name">${item.name || item.rfid}</span>
+                    </div>`
+                ).join('');
+                document.getElementById('returnedSection').style.display = 'block';
+            } else {
+                document.getElementById('returnedSection').style.display = 'none';
+            }
+        }
+
+        // Handle card tap (checkout flow)
+        function handleCheckoutTap() {
+            // Check if all drawers are closed
+            if (anyDrawerOpen()) {
+                const openDrawers = Object.entries(drawerStates)
+                    .filter(([_, open]) => open)
+                    .map(([num]) => num);
+                setState(DisplayState.CHECKOUT_WARNING, { openDrawers });
+                return false;
+            }
+            return true;
+        }
+
+        // Public API for external control
+        window.cabinetDisplay = {
+            setState,
+            setDrawerStates: updateDrawerIndicators,
+            handleCheckoutTap,
+            DisplayState,
+            getState: () => currentState,
+            getDrawerStates: () => ({ ...drawerStates })
+        };
+
+        // Demo mode
+        function runDemo() {
+            console.log('Starting display demo...');
+
+            // IDLE state
+            setState(DisplayState.IDLE);
+            updateDrawerIndicators({ 1: false, 2: false, 3: false, 4: false });
+
+            setTimeout(() => {
+                // Login success
+                setState(DisplayState.LOGIN_SUCCESS, {
+                    user: { name: 'Demo User' }
+                });
+            }, 3000);
+
+            setTimeout(() => {
+                // Simulate drawer opening
+                updateDrawerIndicators({ 1: true, 2: false, 3: true, 4: false });
+            }, 6000);
+
+            setTimeout(() => {
+                // Try checkout with open drawers
+                handleCheckoutTap();
+            }, 8000);
+
+            setTimeout(() => {
+                // Close drawers
+                updateDrawerIndicators({ 1: false, 2: false, 3: false, 4: false });
+                // Start scanning
+                setState(DisplayState.RFID_SCANNING);
+            }, 11000);
+
+            setTimeout(() => {
+                // Show summary
+                setState(DisplayState.SESSION_SUMMARY, {
+                    user: { name: 'Demo User' },
+                    borrowed: [
+                        { name: 'Arduino Uno', rfid: 'RFID-001' },
+                        { name: 'Screwdriver Set', rfid: 'RFID-002' }
+                    ],
+                    returned: [
+                        { name: 'Multimeter', rfid: 'RFID-003' }
+                    ]
+                });
+            }, 14000);
+
+            setTimeout(() => {
+                // Back to idle
+                setState(DisplayState.IDLE);
+            }, 20000);
+        }
+
+        // Start demo after 2 seconds
+        setTimeout(runDemo, 2000);
     </script>
 </body>
 </html>

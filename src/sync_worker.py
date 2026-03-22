@@ -132,18 +132,32 @@ class SyncWorker(threading.Thread):
             # Fetch latest inventory from server
             result = self.api.local_sync(cabinet_id=1)  # TODO: from config
 
-            # Update local cache
+            # Update item types cache
+            item_types = result.get('item_types', [])
+            for item_type in item_types:
+                self.local_db.update_item_type(
+                    id=item_type['id'],
+                    name=item_type['name'],
+                    name_cn=item_type.get('name_cn'),
+                    category=item_type.get('category'),
+                    description=item_type.get('description')
+                )
+            logger.info(f"Synced {len(item_types)} item types")
+
+            # Update items cache
             items = result.get('items', [])
             for item in items:
                 self.local_db.update_item_cache(
                     rfid_tag=item['rfid_tag'],
-                    item_id=item['item_id'],
-                    name=item['name'],
+                    item_id=item['id'],
+                    name=item.get('item_type_name', 'Unknown'),
+                    item_type_id=item.get('item_type_id'),
+                    item_type_name=item.get('item_type_name'),
                     status=item.get('status', 'AVAILABLE'),
                     holder_id=item.get('holder_id'),
-                    description=item.get('description'),
-                    cabinet_id=item.get('cabinet_id')
+                    location_id=item.get('location_id')
                 )
+            logger.info(f"Synced {len(items)} items")
 
             # Cache auth data
             for user in result.get('users', []):
@@ -158,7 +172,7 @@ class SyncWorker(threading.Thread):
                     ttl=3600 * 24  # 24 hours
                 )
 
-            logger.info(f"Synced inventory: {len(items)} items, {len(result.get('users', []))} users")
+            logger.info(f"Synced inventory: {len(items)} items, {len(item_types)} types, {len(result.get('users', []))} users")
             return True
 
         except Exception as e:
