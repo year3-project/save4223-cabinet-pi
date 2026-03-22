@@ -179,7 +179,7 @@ class SmartCabinet:
         logger.info("State: LOCKED - Ready for card/QR scan")
         logger.info("=" * 50)
 
-        self.hardware.set_all_leds('red')
+        self.hardware.set_all_leds('off')
         self.hardware.lock_all()
 
         # Reset session state
@@ -339,7 +339,8 @@ class SmartCabinet:
 
         # Capture start snapshot (RFID tags present when unlocked)
         logger.info("Capturing start RFID snapshot...")
-        start_tags = self._scan_rfid()
+        # Use single scan for start snapshot (faster unlock)
+        start_tags = self.hardware.read_rfid_tags()
         self.inventory.capture_start_snapshot(start_tags)
 
         self.local_db.log_access(
