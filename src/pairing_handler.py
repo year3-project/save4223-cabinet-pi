@@ -68,62 +68,74 @@ class PairingHandler:
         """
         Extract pairing token from QR code content.
 
-        QR content can be:
-        - Direct token: "ABC12345"
-        - URL: "https://save4223.local/pair?token=ABC12345"
-        - JSON: '{"token": "ABC12345", "expires": "2024-01-15T10:30:00Z"}'
+        Server generates QR codes containing JSON:
+          {"type": "CARD_PAIRING", "token": "K9MNP2QR", "exp": "..."}
 
-        Args:
-            qr_content: Raw QR code content
+        The HID keyboard reader strips all non-alphanumeric characters
+        (braces, quotes, colons, etc.) and inserts 'M' noise between
+        keystrokes, so clean JSON parsing is only possible if the reader
+        outputs full ASCII (some models do). Otherwise the long HID
+        output is decoded by stripping M-noise and searching for the
+        CARDPAIRING + TOKEN markers.
 
-        Returns:
-            Extracted token or None if invalid
+        Card UIDs are short raw strings (~9 chars) and will never match.
         """
         if not qr_content:
             return None
 
-        # Clean HID keyboard noise first
         qr_content = self._clean_hid_input(qr_content)
 
-        # Try direct token match (8 alphanumeric chars)
+        # 1. Direct 8-char token (reader outputs clean token only)
         if self.QR_TOKEN_PATTERN.match(qr_content):
             logger.debug(f"Token extracted directly: {qr_content}")
             return qr_content
 
-        # Try URL format
-        if 'token=' in qr_content:
-            try:
-                from urllib.parse import urlparse, parse_qs
-                parsed = urlparse(qr_content)
-                params = parse_qs(parsed.query)
-                if 'token' in params:
-                    token = self._clean_hid_input(params['token'][0])
-                    if self.QR_TOKEN_PATTERN.match(token):
-                        logger.debug(f"Token extracted from URL: {token}")
-                        return token
-            except Exception as e:
-                logger.warning(f"Failed to parse QR URL: {e}")
-
-        # Try JSON format
+        # 2. Clean JSON (reader outputs full ASCII)
         if qr_content.startswith('{'):
             try:
                 import json
                 data = json.loads(qr_content)
-                token = data.get('token', '').upper()
-                if self.QR_TOKEN_PATTERN.match(token):
-                    return token
-            except json.JSONDecodeError:
+                if data.get('type') == 'CARD_PAIRING':
+                    token = data.get('token', '').upper()
+                    if self.QR_TOKEN_PATTERN.match(token):
+                        logger.debug(f"Token extracted from JSON: {token}")
+                        return token
+            except (json.JSONDecodeError, AttributeError):
                 pass
 
-        # Try to find token embedded in longer string (e.g., HID keyboard input)
-        # Only apply to longer inputs - card UIDs are short (< 15 chars) and
-        # would produce false positives via substring extraction.
+        # 3. HID-encoded JSON: special chars stripped, M-noise interspersed.
+        #    Card UIDs are short (~9 chars); QR JSON encodes to 80+ chars.
         if len(qr_content) >= 20:
-            import re
-            matches = re.findall(r'[A-Z0-9]{8}', qr_content.upper())
-            for match in matches:
-                if self.QR_TOKEN_PATTERN.match(match):
-                    return match
+            token = self._extract_hid_json_token(qr_content)
+            if token:
+                return token
+
+        return None
+
+    def _extract_hid_json_token(self, raw: str) -> Optional[str]:
+        """
+        Decode a HID-keyboard-encoded JSON QR payload.
+
+        The HID reader drops {, ", :, ,, } and inserts M between keystrokes.
+        {"type":"CARD_PAIRING","token":"K9MNP2QR","exp":"..."}
+        becomes (M-stripped): TYPECARDPAIRINGTOKENK9MNP2QREXP...
+
+        Strategy: strip all M's, check for CARDPAIRING marker, extract 8
+        chars immediately after TOKEN keyword.
+        """
+        stripped = raw.upper().replace('M', '')
+
+        if 'CARDPAIRING' not in stripped:
+            return None
+
+        idx = stripped.find('TOKEN')
+        if idx < 0:
+            return None
+
+        candidate = stripped[idx + 5:idx + 13]  # 5 = len('TOKEN'), 8 chars
+        if self.QR_TOKEN_PATTERN.match(candidate):
+            logger.debug(f"Token extracted from HID JSON: {candidate}")
+            return candidate
 
         return None
 
