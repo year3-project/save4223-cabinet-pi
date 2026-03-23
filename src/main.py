@@ -94,9 +94,10 @@ class SmartCabinet:
         self.local_db = LocalDB(CONFIG['db_path'])
         self.sync_worker = SyncWorker(
             self.local_db, self.api,
-            interval=CONFIG.get('sync_interval', 60)
+            interval=CONFIG.get('sync_interval', 60),
+            cabinet_id=CONFIG['cabinet_id']
         )
-        self.pairing_handler = PairingHandler(self.api, self.local_db)
+        self.pairing_handler = PairingHandler(self.api, self.local_db, cabinet_id=CONFIG['cabinet_id'])
         self.inventory = InventoryManager(self.local_db, cabinet_id=CONFIG['cabinet_id'])
 
         # Initialize display (optional) - pass hardware for real-time drawer status
@@ -735,7 +736,7 @@ class SmartCabinet:
         """
         Perform RFID scan with voting mechanism for accurate results.
 
-        Uses 5 scan cycles and requires a tag to appear at least 2 times
+        Uses 10 scan cycles and requires a tag to appear at least 3 times
         to be considered present. This reduces false positives from
         sporadic reads.
         """

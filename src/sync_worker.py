@@ -11,11 +11,12 @@ logger = logging.getLogger(__name__)
 class SyncWorker(threading.Thread):
     """Background thread for syncing with server."""
     
-    def __init__(self, local_db, api_client, interval: int = 60):
+    def __init__(self, local_db, api_client, interval: int = 60, cabinet_id: int = 1):
         super().__init__(daemon=True)
         self.local_db = local_db
         self.api = api_client
         self.interval = interval
+        self.cabinet_id = cabinet_id
         self._running = False
         self._online = False
         self._stop_event = threading.Event()
@@ -74,7 +75,7 @@ class SyncWorker(threading.Thread):
                 # Call API with start/end RFIDs
                 result = self.api.sync_session(
                     session_id=session_id,
-                    cabinet_id=1,  # TODO: get from config
+                    cabinet_id=self.cabinet_id,
                     user_id=item['user_id'],
                     start_rfids=item.get('start_rfids', []),
                     end_rfids=item.get('end_rfids', [])
@@ -130,7 +131,7 @@ class SyncWorker(threading.Thread):
 
         try:
             # Fetch latest inventory from server
-            result = self.api.local_sync(cabinet_id=1)  # TODO: from config
+            result = self.api.local_sync(cabinet_id=self.cabinet_id)
 
             # Update item types cache
             item_types = result.get('item_types', [])

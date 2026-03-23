@@ -76,6 +76,22 @@ class HardwareInterface(ABC):
         """
         pass
 
+    def read_rfid_tags_voting(self, total_cycles: int = 10, min_appearances: int = 3) -> List[str]:
+        """
+        Read RFID tags with voting for accuracy. Default implementation
+        falls back to a single read_rfid_tags call (sufficient for mock/test).
+
+        Real hardware overrides this with multi-cycle voting logic.
+
+        Args:
+            total_cycles: Total number of scan cycles (default 10)
+            min_appearances: Minimum appearances to confirm a tag (default 3)
+
+        Returns:
+            List of confirmed RFID tag UIDs
+        """
+        return self.read_rfid_tags()
+
     @abstractmethod
     def unlock_drawer(self, drawer_id: int) -> bool:
         """

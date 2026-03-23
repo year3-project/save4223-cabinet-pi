@@ -39,9 +39,10 @@ class PairingHandler:
     QR_TOKEN_PATTERN = re.compile(r'^[A-Z0-9]{8}$')  # e.g., "ABC12345"
     PAIRING_CODE_PATTERN = re.compile(r'^\d{6}$')   # e.g., "123456"
 
-    def __init__(self, api_client: APIClient, local_db: LocalDB):
+    def __init__(self, api_client: APIClient, local_db: LocalDB, cabinet_id: int = 1):
         self.api = api_client
         self.db = local_db
+        self.cabinet_id = cabinet_id
         self._pending_pairing: Optional[Dict[str, Any]] = None
 
     def _clean_hid_input(self, content: str) -> str:
@@ -395,7 +396,7 @@ class PairingHandler:
                 result = self.api.pair_card(
                     pairing_token=pairing['pairing_code'],
                     card_uid=pairing['card_uid'],
-                    cabinet_id=1  # TODO: from config
+                    cabinet_id=self.cabinet_id
                 )
 
                 if result.get('success'):

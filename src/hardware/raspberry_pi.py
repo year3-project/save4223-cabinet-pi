@@ -270,8 +270,8 @@ class RFIDReader:
         out of total_cycles scans. This reduces false positives from sporadic reads.
 
         Args:
-            total_cycles: Total number of scan cycles (default 5)
-            min_appearances: Minimum times a tag must appear to be considered present (default 2)
+            total_cycles: Total number of scan cycles (default 10)
+            min_appearances: Minimum times a tag must appear to be considered present (default 3)
 
         Returns:
             List of tags that passed the voting threshold
@@ -280,6 +280,9 @@ class RFIDReader:
 
         if not self.connect():
             return []
+
+        # Clear any stale buffer data from a previous call
+        self._recv_buffer.clear()
 
         tag_counter = Counter()
         cycle = 0
@@ -294,9 +297,9 @@ class RFIDReader:
             cmd_payload = bytes([session, target, repeat])
 
             while self.reading and cycle < total_cycles:
-                # Clear tags for this cycle to get fresh detection
-                cycle_tags = set()
+                # Clear tags and buffer for this cycle to get fresh detection
                 self.work_mode_tags.clear()
+                self._recv_buffer.clear()
 
                 packet = self._build_packet(0x8B, cmd_payload)
                 if self.socket:
@@ -595,8 +598,8 @@ class RaspberryPiHardware(HardwareInterface):
         out of total_cycles scans. This reduces false positives from sporadic reads.
 
         Args:
-            total_cycles: Total number of scan cycles (default 5)
-            min_appearances: Minimum times a tag must appear to be considered present (default 2)
+            total_cycles: Total number of scan cycles (default 10)
+            min_appearances: Minimum times a tag must appear to be considered present (default 3)
 
         Returns:
             List of tags that passed the voting threshold
