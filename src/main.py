@@ -97,7 +97,7 @@ class SmartCabinet:
             interval=CONFIG.get('sync_interval', 60)
         )
         self.pairing_handler = PairingHandler(self.api, self.local_db)
-        self.inventory = InventoryManager(self.local_db)
+        self.inventory = InventoryManager(self.local_db, cabinet_id=CONFIG['cabinet_id'])
 
         # Initialize display (optional) - pass hardware for real-time drawer status
         self.display = None

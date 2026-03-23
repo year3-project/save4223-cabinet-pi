@@ -50,8 +50,9 @@ class InventoryManager:
     - Support offline operation
     """
 
-    def __init__(self, local_db: LocalDB):
+    def __init__(self, local_db: LocalDB, cabinet_id: int = 1):
         self.db = local_db
+        self.cabinet_id = cabinet_id
         self._session_start_rfids: Optional[Set[str]] = None
         self._current_session_id: Optional[str] = None
 
@@ -78,7 +79,7 @@ class InventoryManager:
         if self._current_session_id:
             self.db.save_rfid_snapshot(
                 session_id=self._current_session_id,
-                cabinet_id=1,  # TODO: from config
+                cabinet_id=self.cabinet_id,
                 rfid_tags=rfid_tags,
                 snapshot_type='start'
             )
@@ -119,7 +120,7 @@ class InventoryManager:
         if self._current_session_id:
             self.db.save_rfid_snapshot(
                 session_id=self._current_session_id,
-                cabinet_id=1,
+                cabinet_id=self.cabinet_id,
                 rfid_tags=rfid_tags,
                 snapshot_type='end'
             )
@@ -132,7 +133,7 @@ class InventoryManager:
     def _get_last_known_state(self) -> Set[str]:
         """Get the last known RFID state from database."""
         # Query the most recent end snapshot
-        tags = self.db.get_last_snapshot(cabinet_id=1)
+        tags = self.db.get_last_snapshot(cabinet_id=self.cabinet_id)
         return set(tags)
 
     def _resolve_items(self, rfid_tags: Set[str], action: str) -> List[Dict[str, Any]]:
