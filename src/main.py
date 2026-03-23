@@ -355,11 +355,10 @@ class SmartCabinet:
         self.hardware.unlock_all()
         self.hardware.beep_success()
 
-        # Capture start snapshot (RFID tags present when unlocked)
-        logger.info("Capturing start RFID snapshot...")
-        # Use voting method for better accuracy (10 cycles, need 3+ appearances)
-        start_tags = self.hardware.read_rfid_tags_voting()
-        logger.info(f"Start tags: {start_tags}")
+        # Load start snapshot from last session's end state (no live scan at open)
+        logger.info("Loading start RFID snapshot from DB...")
+        start_tags = self.local_db.get_last_snapshot(CONFIG['cabinet_id'])
+        logger.info(f"Start tags from DB: {start_tags}")
         self.inventory.capture_start_snapshot(start_tags)
 
         self.local_db.log_access(
@@ -800,6 +799,13 @@ class SmartCabinet:
 
         card = self.hardware.read_nfc(timeout=0.5)
         if card:
+            # Check if this is a pairing QR token (long HID output) vs a card UID (short)
+            token = self.pairing_handler.extract_token_from_qr(card)
+            if token:
+                logger.info(f"Pairing token detected via NFC reader: {token}")
+                self._enter_pairing_mode(token)
+                return
+
             logger.info(f"Card detected: {card[:10]}...")
             self.current_card_uid = card  # Save so _on_authenticating doesn't re-read
             self.state_machine.transition(SystemState.AUTHENTICATING)
