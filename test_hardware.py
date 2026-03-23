@@ -191,7 +191,7 @@ def test_flow(hw):
     # Step 1: Pre-scan RFID before auth (blue chase while scanning)
     print("\n[1/6] Pre-scan RFID inventory (baseline)...")
     scan_handle = start_led('chase', 'blue', duration=0.5)
-    start_tags = hw.read_rfid_tags() or []
+    start_tags = hw.read_rfid_tags_voting() or []
     stop_led(scan_handle)
     if start_tags:
         print(f"  Baseline: {len(start_tags)} tag(s)")
@@ -253,7 +253,7 @@ def test_flow(hw):
     # Step 6: Post-lock RFID scan and diff (blue chase while scanning)
     print("\n[6/6] Post-lock RFID inventory...")
     scan_handle = start_led('chase', 'blue', duration=0.5)
-    end_tags = hw.read_rfid_tags() or []
+    end_tags = hw.read_rfid_tags_voting() or []
     stop_led(scan_handle)
     print(f"  End tags: {len(end_tags)}")
 
