@@ -116,12 +116,14 @@ class PairingHandler:
                 pass
 
         # Try to find token embedded in longer string (e.g., HID keyboard input)
-        # Search for 8-character alphanumeric sequence
-        import re
-        matches = re.findall(r'[A-Z0-9]{8}', qr_content.upper())
-        for match in matches:
-            if self.QR_TOKEN_PATTERN.match(match):
-                return match
+        # Only apply to longer inputs - card UIDs are short (< 15 chars) and
+        # would produce false positives via substring extraction.
+        if len(qr_content) >= 20:
+            import re
+            matches = re.findall(r'[A-Z0-9]{8}', qr_content.upper())
+            for match in matches:
+                if self.QR_TOKEN_PATTERN.match(match):
+                    return match
 
         return None
 
