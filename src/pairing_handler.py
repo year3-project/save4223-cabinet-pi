@@ -104,12 +104,44 @@ class PairingHandler:
             except (json.JSONDecodeError, AttributeError):
                 pass
 
-        # 3. HID-encoded JSON: special chars stripped, M-noise interspersed.
-        #    Card UIDs are short (~9 chars); QR JSON encodes to 80+ chars.
+        # 3. HID-encoded JSON or URL: special chars stripped, M-noise interspersed.
+        #    Card UIDs are short (~9 chars); QR payloads are typically much longer.
         if len(qr_content) >= 20:
             token = self._extract_hid_json_token(qr_content)
             if token:
                 return token
+
+            token = self._extract_hid_marker_token(qr_content)
+            if token:
+                return token
+
+        return None
+
+    def _extract_hid_marker_token(self, raw: str) -> Optional[str]:
+        """
+        Extract token from HID-encoded QR payloads that include markers.
+
+        Looks for TOKEN/PAIRUP/PAIRING/CODE markers after removing M-noise,
+        then returns the next 8 alphanumeric characters.
+        """
+        stripped = raw.upper().replace('M', '')
+        markers = ['TOKEN', 'PAIRUP', 'PAIRING', 'CODE']
+
+        for marker in markers:
+            idx = stripped.find(marker)
+            if idx < 0:
+                continue
+            start = idx + len(marker)
+            candidate = stripped[start:start + 8]
+            if self.QR_TOKEN_PATTERN.match(candidate):
+                logger.debug(f"Token extracted from HID marker {marker}: {candidate}")
+                return candidate
+
+        # Fallback: if there is exactly one 8-digit sequence, use it.
+        matches = re.findall(r'\d{8}', stripped)
+        if len(matches) == 1:
+            logger.debug(f"Token extracted from HID digits: {matches[0]}")
+            return matches[0]
 
         return None
 

@@ -76,7 +76,15 @@ class HardwareInterface(ABC):
         """
         pass
 
-    def read_rfid_tags_voting(self, total_cycles: int = 10, min_appearances: int = 3) -> List[str]:
+    def read_rfid_tags_voting(
+        self,
+        total_cycles: int = 10,
+        min_appearances: int = 3,
+        read_interval: Optional[float] = None,
+        idle_break_timeout: Optional[float] = None,
+        max_cycle_wait: Optional[float] = None,
+        log_each_cycle: bool = False,
+    ) -> List[str]:
         """
         Read RFID tags with voting for accuracy. Default implementation
         falls back to a single read_rfid_tags call (sufficient for mock/test).
@@ -86,6 +94,10 @@ class HardwareInterface(ABC):
         Args:
             total_cycles: Total number of scan cycles (default 10)
             min_appearances: Minimum appearances to confirm a tag (default 3)
+            read_interval: Seconds between cycles (None uses hardware default)
+            idle_break_timeout: Seconds of inactivity before a cycle ends
+            max_cycle_wait: Max seconds to wait for data in one cycle
+            log_each_cycle: Log tags found on each cycle
 
         Returns:
             List of confirmed RFID tag UIDs

@@ -736,12 +736,30 @@ class SmartCabinet:
         """
         Perform RFID scan with voting mechanism for accurate results.
 
-        Uses 10 scan cycles and requires a tag to appear at least 3 times
-        to be considered present. This reduces false positives from
-        sporadic reads.
+        Parameters are configurable via CONFIG['rfid'] to balance
+        missed reads vs. false positives.
         """
-        logger.info("Starting RFID voting scan (10 cycles, need 3+ appearances)")
-        result = self.hardware.read_rfid_tags_voting()
+        rfid_cfg = CONFIG.get('rfid', {})
+        total_cycles = rfid_cfg.get('voting_cycles', 10)
+        min_appearances = rfid_cfg.get('min_appearances', 3)
+        read_interval = rfid_cfg.get('read_interval', 1.0)
+        idle_break_timeout = rfid_cfg.get('idle_break_timeout', 0.2)
+        max_cycle_wait = rfid_cfg.get('max_cycle_wait', 2.0)
+        log_each_cycle = rfid_cfg.get('log_each_cycle', False)
+
+        logger.info(
+            "Starting RFID voting scan (%s cycles, need %s+ appearances)",
+            total_cycles,
+            min_appearances,
+        )
+        result = self.hardware.read_rfid_tags_voting(
+            total_cycles=total_cycles,
+            min_appearances=min_appearances,
+            read_interval=read_interval,
+            idle_break_timeout=idle_break_timeout,
+            max_cycle_wait=max_cycle_wait,
+            log_each_cycle=log_each_cycle,
+        )
         logger.info(f"RFID voting scan complete: {len(result)} confirmed tags")
         return result
 
@@ -787,6 +805,23 @@ class SmartCabinet:
         """Poll for NFC or QR in LOCKED state."""
         # Skip if hardware not initialized yet
         if not getattr(self.hardware, '_initialized', False):
+            return
+
+        # HID readers deliver both NFC and QR as keystrokes. Avoid short, repeated
+        # reads that can fragment a single scan into noisy pieces.
+        hid_reader = getattr(self.hardware, '_hid_reader', None)
+        if hid_reader and hid_reader.is_available():
+            raw = self.hardware.read_nfc(timeout=1.0)
+            if raw:
+                token = self.pairing_handler.extract_token_from_qr(raw)
+                if token:
+                    logger.info(f"Pairing token detected via HID: {token}")
+                    self._enter_pairing_mode(token)
+                    return
+
+                logger.info(f"Card detected: {raw[:10]}...")
+                self.current_card_uid = raw
+                self.state_machine.transition(SystemState.AUTHENTICATING)
             return
 
         # Check for QR code first (pairing mode)

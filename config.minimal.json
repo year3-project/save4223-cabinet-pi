@@ -6,6 +6,13 @@
   "db_path": "./data/local.db",
   "session_timeout": 300,
   "rfid_scan_count": 10,
+  "rfid": {
+    "voting_cycles": 10,
+    "min_appearances": 3,
+    "read_interval": 1.0,
+    "idle_break_timeout": 0.2,
+    "max_cycle_wait": 2.0
+  },
   "sync_interval": 60,
   "num_drawers": 4,
   "ssl": {

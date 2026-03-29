@@ -262,7 +262,15 @@ class RFIDReader:
             self.stop_reading()
             self.disconnect()
 
-    def read_rfid_tags_voting(self, total_cycles: int = 10, min_appearances: int = 3) -> List[str]:
+    def read_rfid_tags_voting(
+        self,
+        total_cycles: int = 10,
+        min_appearances: int = 3,
+        read_interval: Optional[float] = None,
+        idle_break_timeout: Optional[float] = None,
+        max_cycle_wait: Optional[float] = None,
+        log_each_cycle: bool = False,
+    ) -> List[str]:
         """
         Read RFID tags with voting mechanism for better accuracy.
 
@@ -272,6 +280,10 @@ class RFIDReader:
         Args:
             total_cycles: Total number of scan cycles (default 10)
             min_appearances: Minimum times a tag must appear to be considered present (default 3)
+            read_interval: Seconds between cycles (None uses hardware default)
+            idle_break_timeout: Seconds of inactivity before a cycle ends
+            max_cycle_wait: Max seconds to wait for data in one cycle
+            log_each_cycle: Log tags found on each cycle
 
         Returns:
             List of tags that passed the voting threshold
@@ -288,18 +300,35 @@ class RFIDReader:
         cycle = 0
         self.reading = True
 
-        logger.info(f"Starting RFID voting scan - {total_cycles} cycles, need {min_appearances} appearances")
+        interval = RFID_READ_INTERVAL if read_interval is None else read_interval
+        prev_idle = self._idle_break_timeout
+        prev_max_wait = self._max_cycle_wait
+        if idle_break_timeout is not None:
+            self._idle_break_timeout = idle_break_timeout
+        if max_cycle_wait is not None:
+            self._max_cycle_wait = max_cycle_wait
+
+        logger.info(
+            "Starting RFID voting scan - %s cycles, need %s appearances (interval=%.2fs, idle=%.2fs, max_wait=%.2fs)",
+            total_cycles,
+            min_appearances,
+            interval,
+            self._idle_break_timeout,
+            self._max_cycle_wait,
+        )
 
         try:
             session = 0x01
             target = 0x00
             repeat = 0x01
-            cmd_payload = bytes([session, target, repeat])
 
             while self.reading and cycle < total_cycles:
-                # Clear tags and buffer for this cycle to get fresh detection
+                # Toggle target between 0x00 and 0x01 every cycle to capture inverted tags (Session 1)
+                target = 0x00 if cycle % 2 == 0 else 0x01
+                cmd_payload = bytes([session, target, repeat])
+
+                # Clear tags for this cycle to get fresh detection
                 self.work_mode_tags.clear()
-                self._recv_buffer.clear()
 
                 packet = self._build_packet(0x8B, cmd_payload)
                 if self.socket:
@@ -313,9 +342,17 @@ class RFIDReader:
                 for tag in cycle_tags:
                     tag_counter[tag] += 1
 
-                logger.debug(f"[Cycle {cycle+1}/{total_cycles}] Found: {list(cycle_tags)}")
+                if log_each_cycle:
+                    logger.info(
+                        "[RFID] Cycle %s/%s -> %s",
+                        cycle + 1,
+                        total_cycles,
+                        sorted(cycle_tags),
+                    )
+                else:
+                    logger.debug(f"[Cycle {cycle+1}/{total_cycles}] Found: {list(cycle_tags)}")
                 cycle += 1
-                time.sleep(RFID_READ_INTERVAL)
+                time.sleep(interval)
 
             # Apply voting threshold - tag must appear at least min_appearances times
             confirmed_tags = [tag for tag, count in tag_counter.items() if count >= min_appearances]
@@ -330,6 +367,8 @@ class RFIDReader:
             logger.error(f"RFID voting read error: {e}")
             return []
         finally:
+            self._idle_break_timeout = prev_idle
+            self._max_cycle_wait = prev_max_wait
             self.stop_reading()
             self.disconnect()
 
@@ -590,7 +629,15 @@ class RaspberryPiHardware(HardwareInterface):
 
         return self._rfid_reader.read_rfid_tags_multiple()
 
-    def read_rfid_tags_voting(self, total_cycles: int = 10, min_appearances: int = 3) -> List[str]:
+    def read_rfid_tags_voting(
+        self,
+        total_cycles: int = 10,
+        min_appearances: int = 3,
+        read_interval: Optional[float] = None,
+        idle_break_timeout: Optional[float] = None,
+        max_cycle_wait: Optional[float] = None,
+        log_each_cycle: bool = False,
+    ) -> List[str]:
         """
         Read RFID tags with voting mechanism for better accuracy.
 
@@ -607,7 +654,14 @@ class RaspberryPiHardware(HardwareInterface):
         if not self._rfid_reader:
             return []
 
-        return self._rfid_reader.read_rfid_tags_voting(total_cycles, min_appearances)
+        return self._rfid_reader.read_rfid_tags_voting(
+            total_cycles=total_cycles,
+            min_appearances=min_appearances,
+            read_interval=read_interval,
+            idle_break_timeout=idle_break_timeout,
+            max_cycle_wait=max_cycle_wait,
+            log_each_cycle=log_each_cycle,
+        )
 
     def unlock_drawer(self, drawer_id: int) -> bool:
         """Unlock a specific solenoid."""

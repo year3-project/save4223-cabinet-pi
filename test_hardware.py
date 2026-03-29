@@ -22,12 +22,17 @@ import sys
 import time
 import argparse
 import threading
+import logging
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent / 'src'))
 
 from hardware import RaspberryPiHardware, DrawerState, LEDColor
 from hardware.raspberry_pi import SOLENOID_PINS, DRAWER_SWITCH_PINS, LED_COUNT, RFID_HOST, RFID_PORT
+from pairing_handler import PairingHandler
+from config import CONFIG
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 
 def test_nfc_reader(hw):
@@ -49,7 +54,11 @@ def test_nfc_reader(hw):
     try:
         uid = hw.read_nfc(timeout=10)
         if uid:
-            print(f"  PASS  Card UID: {uid}")
+            pairing_handler = PairingHandler(None, None)
+            token = pairing_handler.extract_token_from_qr(uid)
+            scan_type = "QR" if token else "NFC"
+            print(f"  PASS  Raw: {uid}")
+            print(f"  Type: {scan_type}")
             return True
         else:
             print("  FAIL  No card detected (timeout)")
@@ -61,15 +70,33 @@ def test_nfc_reader(hw):
 
 def test_rfid_reader(hw):
     """Test RFID reader (TCP socket) with voting mechanism."""
+    rfid_cfg = CONFIG.get('rfid', {})
+    total_cycles = rfid_cfg.get('voting_cycles', 10)
+    min_appearances = rfid_cfg.get('min_appearances', 3)
+    read_interval = rfid_cfg.get('read_interval', 1.0)
+    idle_break_timeout = rfid_cfg.get('idle_break_timeout', 0.2)
+    max_cycle_wait = rfid_cfg.get('max_cycle_wait', 2.0)
+    log_each_cycle = rfid_cfg.get('log_each_cycle', False)
+
     print("\n" + "=" * 50)
     print("TESTING RFID READER (VOTING MODE)")
     print(f"  Host: {RFID_HOST}:{RFID_PORT}")
-    print(f"  Config: 10 cycles, need 3+ appearances to confirm")
+    print(
+        f"  Config: {total_cycles} cycles, need {min_appearances}+ appearances "
+        f"(interval={read_interval:.2f}s, idle={idle_break_timeout:.2f}s, max_wait={max_cycle_wait:.2f}s)"
+    )
     print("=" * 50)
     print("Place RFID tags near the antennas...")
 
-    # Use voting method for better accuracy (10 cycles, need 3+ appearances)
-    tags = hw.read_rfid_tags_voting()
+    # Use voting method for better accuracy (configurable cycles/thresholds)
+    tags = hw.read_rfid_tags_voting(
+        total_cycles=total_cycles,
+        min_appearances=min_appearances,
+        read_interval=read_interval,
+        idle_break_timeout=idle_break_timeout,
+        max_cycle_wait=max_cycle_wait,
+        log_each_cycle=log_each_cycle,
+    )
 
     if tags:
         print(f"  PASS  {len(tags)} confirmed tag(s):")
