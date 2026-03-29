@@ -52,13 +52,21 @@ def test_nfc_reader(hw):
     print("Tap a card or scan a QR code (10s timeout)...")
 
     try:
-        uid = hw.read_nfc(timeout=10)
-        if uid:
+        # Use the auto-detect method instead of read_nfc
+        result = hw.read_card_auto(timeout=10)
+        if result:
+            raw_data = result['data']
+            card_type = result['type']
+
+            # Try to extract token if it's a QR
             pairing_handler = PairingHandler(None, None)
-            token = pairing_handler.extract_token_from_qr(uid)
-            scan_type = "QR" if token else "NFC"
-            print(f"  PASS  Raw: {uid}")
-            print(f"  Type: {scan_type}")
+            token = pairing_handler.extract_token_from_qr(raw_data) if card_type == 'qr' else None
+
+            display_type = "QR (Pairing Token)" if token else card_type.upper()
+            print(f"  PASS  Raw: {raw_data}")
+            print(f"  Type: {display_type}")
+            if token:
+                print(f"  Token: {token}")
             return True
         else:
             print("  FAIL  No card detected (timeout)")

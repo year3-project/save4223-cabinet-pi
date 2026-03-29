@@ -207,21 +207,23 @@ class NFCQRReader:
 
         cleaned = data.strip().upper()
 
-        # NFC UID patterns (typically 8-14 digit decimal, or hex)
-        # Pattern 1: Pure numeric, 8-14 digits (typical Mifare UID in decimal)
-        if cleaned.isdigit() and 8 <= len(cleaned) <= 14:
+        # NFC UID patterns (typically 4-14 digit decimal, or hex)
+        # Pattern 1: Pure numeric, 4-14 digits (typical card UID in decimal)
+        if cleaned.isdigit() and 4 <= len(cleaned) <= 14:
             return 'nfc'
 
         # Pattern 2: Hex format with 8 chars (4-byte UID)
         if len(cleaned) == 8 and all(c in '0123456789ABCDEF' for c in cleaned):
-            # Additional check: not looking like a QR token
             return 'nfc'
 
-        # Pattern 3: 7-10 digit numeric (common card UID lengths)
-        if cleaned.isdigit() and 7 <= len(cleaned) <= 10:
-            return 'nfc'
+        # Pattern 3: Short alphanumeric (5-10 chars) - could be NFC or short QR
+        # If it's mostly digits (>=70%), treat as NFC
+        if 5 <= len(cleaned) <= 10:
+            digit_count = sum(1 for c in cleaned if c.isdigit())
+            if digit_count / len(cleaned) >= 0.7:
+                return 'nfc'
 
-        # Everything else is likely QR
+        # Everything else is likely QR (longer, mixed alphanumeric, JSON fragments, etc.)
         return 'qr'
 
     @staticmethod

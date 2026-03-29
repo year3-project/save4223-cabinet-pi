@@ -807,24 +807,31 @@ class SmartCabinet:
         if not getattr(self.hardware, '_initialized', False):
             return
 
-        # HID readers deliver both NFC and QR as keystrokes. Avoid short, repeated
-        # reads that can fragment a single scan into noisy pieces.
+        # Use unified card reading method for HID readers
         hid_reader = getattr(self.hardware, '_hid_reader', None)
         if hid_reader and hid_reader.is_available():
-            raw = self.hardware.read_nfc(timeout=1.0)
-            if raw:
+            result = self.hardware.read_card_auto(timeout=1.0)
+            if result:
+                raw = result['data']
+                card_type = result['type']
+
+                # Try to extract pairing token
                 token = self.pairing_handler.extract_token_from_qr(raw)
                 if token:
                     logger.info(f"Pairing token detected via HID: {token}")
                     self._enter_pairing_mode(token)
                     return
 
-                logger.info(f"Card detected: {raw[:10]}...")
-                self.current_card_uid = raw
-                self.state_machine.transition(SystemState.AUTHENTICATING)
+                if card_type == 'nfc':
+                    logger.info(f"Card detected: {raw[:10]}...")
+                    self.current_card_uid = raw
+                    self.state_machine.transition(SystemState.AUTHENTICATING)
+                else:
+                    # QR code but not a pairing token - log and ignore
+                    logger.debug(f"QR code detected but not a pairing token: {raw[:30]}...")
             return
 
-        # Check for QR code first (pairing mode)
+        # Non-HID mode: Check for QR code first (pairing mode)
         qr = self.hardware.read_qr(timeout=0.1)
         if qr:
             token = self.pairing_handler.extract_token_from_qr(qr)
