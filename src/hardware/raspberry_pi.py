@@ -53,7 +53,7 @@ NFC_BAUD_RATE = 115200
 
 
 class NFCQRReader:
-    """USB NFC/QR code reader."""
+    """USB NFC/QR code reader with improved format detection."""
 
     def __init__(self):
         self.ser = None
@@ -113,12 +113,12 @@ class NFCQRReader:
         return self.ser is not None and self.ser.is_open
 
     def read_nfc_card(self) -> Optional[str]:
-        """Read NFC card UID."""
+        """Read NFC card UID from serial device."""
         if not self.ser or not self.ser.is_open:
             return None
 
         try:
-            # Command to read UID
+            # Command to read UID (ISO14443A)
             read_uid_command = bytes([
                 0x0E, 0x01, 0x26, 0x01, 0x00, 0x01, 0x0A,
                 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xC4
@@ -144,7 +144,7 @@ class NFCQRReader:
                             if status == 0x00 and response_len == 25:
                                 uid = response[4:8]
                                 uid_decimal = str(int.from_bytes(uid, byteorder='big'))
-                                logger.info(f"NFC card detected: {uid_decimal}")
+                                logger.info(f"NFC card detected (serial): {uid_decimal}")
                                 return uid_decimal
             return None
 
@@ -153,18 +153,98 @@ class NFCQRReader:
             return None
 
     def read_qr_code(self) -> Optional[str]:
-        """Read QR code."""
+        """Read QR code from serial device."""
         try:
             if self.ser and self.ser.in_waiting > 0:
-                self.ser.reset_input_buffer()
                 qr_data = self.ser.readline().decode('utf-8', errors='ignore').strip()
                 if qr_data and len(qr_data) > 0:
-                    logger.info(f"QR code detected: {qr_data}")
+                    logger.info(f"QR code detected (serial): {qr_data}")
                     return qr_data
             return None
         except Exception as e:
             logger.error(f"QR read error: {e}")
             return None
+
+    def read_card(self) -> Optional[Dict[str, str]]:
+        """
+        Unified card reading method with format detection.
+
+        Returns:
+            Dict with 'type' ('nfc' or 'qr') and 'data' keys,
+            or None if no card read
+        """
+        if not self.ser or not self.ser.is_open:
+            return None
+
+        try:
+            # First try reading as NFC (using command)
+            nfc_uid = self.read_nfc_card()
+            if nfc_uid:
+                return {'type': 'nfc', 'data': nfc_uid}
+
+            # Then try reading as QR (line-based)
+            qr_data = self.read_qr_code()
+            if qr_data:
+                card_type = self._detect_card_type(qr_data)
+                return {'type': card_type, 'data': qr_data}
+
+            return None
+
+        except Exception as e:
+            logger.error(f"Card read error: {e}")
+            return None
+
+    @staticmethod
+    def _detect_card_type(data: str) -> str:
+        """
+        Detect whether data is from NFC card or QR code.
+
+        Returns:
+            'nfc' or 'qr'
+        """
+        if not data:
+            return 'qr'
+
+        cleaned = data.strip().upper()
+
+        # NFC UID patterns (typically 8-14 digit decimal, or hex)
+        # Pattern 1: Pure numeric, 8-14 digits (typical Mifare UID in decimal)
+        if cleaned.isdigit() and 8 <= len(cleaned) <= 14:
+            return 'nfc'
+
+        # Pattern 2: Hex format with 8 chars (4-byte UID)
+        if len(cleaned) == 8 and all(c in '0123456789ABCDEF' for c in cleaned):
+            # Additional check: not looking like a QR token
+            return 'nfc'
+
+        # Pattern 3: 7-10 digit numeric (common card UID lengths)
+        if cleaned.isdigit() and 7 <= len(cleaned) <= 10:
+            return 'nfc'
+
+        # Everything else is likely QR
+        return 'qr'
+
+    @staticmethod
+    def clean_hid_input(content: str) -> str:
+        """
+        Clean HID keyboard input by removing common noise patterns.
+
+        HID readers often inject noise characters between keystrokes.
+        """
+        if not content:
+            return ""
+
+        # Remove common HID reader noise characters
+        # 'M' is commonly inserted between keystrokes by some readers
+        cleaned = content.strip()
+        cleaned = cleaned.replace('M', '')
+
+        # Remove other common noise patterns
+        noise_chars = ['\x00', '\x01', '\x02', '\x03']
+        for char in noise_chars:
+            cleaned = cleaned.replace(char, '')
+
+        return cleaned.strip()
 
     def close(self):
         """Close serial connection."""
@@ -376,6 +456,7 @@ class RFIDReader:
         """Receive and process RFID data."""
         start_time = time.time()
         last_data_time = time.time()
+        bytes_received = 0
 
         while self.reading and (time.time() - start_time) < self._max_cycle_wait:
             try:
@@ -383,98 +464,209 @@ class RFIDReader:
                 data = self.socket.recv(4096)
                 if data:
                     last_data_time = time.time()
+                    bytes_received += len(data)
                     self._recv_buffer.extend(data)
-                    self._extract_frames_from_buffer()
+                    frames_found = self._extract_frames_from_buffer()
+                    logger.debug(f"RFID recv: {len(data)} bytes, frames found: {frames_found}")
                 else:
+                    # No data received, check idle timeout
                     if (time.time() - last_data_time) > self._idle_break_timeout:
+                        logger.debug(f"RFID idle timeout after {bytes_received} bytes")
                         break
             except socket.timeout:
                 if (time.time() - last_data_time) > self._idle_break_timeout:
+                    logger.debug(f"RFID idle timeout (socket) after {bytes_received} bytes")
                     break
                 continue
             except Exception as e:
                 logger.error(f"RFID receive error: {e}")
                 break
 
-    def _extract_frames_from_buffer(self):
-        """Extract frames from receive buffer."""
+        if bytes_received > 0:
+            logger.debug(f"RFID receive cycle complete: {bytes_received} bytes, buffer remaining: {len(self._recv_buffer)}")
+
+    def _extract_frames_from_buffer(self) -> int:
+        """
+        Extract frames from receive buffer.
+
+        Returns:
+            Number of valid frames extracted
+        """
         buf = self._recv_buffer
         pos = 0
+        frames_found = 0
+        MAX_FRAME_LEN = 256  # Maximum reasonable frame length
 
         while pos + 5 <= len(buf):
+            # Look for frame header 0xA0
             if buf[pos] != 0xA0:
                 pos += 1
                 continue
 
+            # Check if we have enough bytes for length field
+            if pos + 2 > len(buf):
+                break
+
             length = buf[pos + 1]
             frame_total_len = 2 + length
 
+            # Sanity check: frame length should be reasonable
+            if length < 3 or frame_total_len > MAX_FRAME_LEN:
+                # Invalid length, skip this potential header and continue searching
+                logger.debug(f"Invalid frame length {length} at pos {pos}, skipping")
+                pos += 1
+                continue
+
+            # Check if we have the complete frame
             if pos + frame_total_len > len(buf):
+                # Incomplete frame, keep buffer for next receive
+                logger.debug(f"Incomplete frame: need {frame_total_len}, have {len(buf) - pos}")
                 break
 
+            # Extract and validate frame
             frame = bytes(buf[pos: pos + frame_total_len])
             received_cs = frame[-1]
             calc_cs = self._checksum(frame[:-1])
 
             if received_cs != calc_cs:
-                pos += 1
+                logger.debug(f"Checksum mismatch at pos {pos}: received {received_cs:02X}, calc {calc_cs:02X}")
+                # Try to find next frame header within this failed frame
+                next_a0 = self._find_next_header(buf, pos + 1, pos + frame_total_len)
+                if next_a0 > 0:
+                    pos = next_a0
+                else:
+                    pos += 1
                 continue
 
+            # Valid frame found, parse it
             try:
                 self._parse_frame(frame)
+                frames_found += 1
             except Exception as e:
-                logger.debug(f"Frame parse error: {e}")
+                logger.warning(f"Frame parse error: {e}, frame: {frame.hex()}")
 
             pos += frame_total_len
 
+        # Keep unprocessed bytes in buffer
         if pos > 0:
             remaining = buf[pos:]
             self._recv_buffer = bytearray(remaining)
+            if pos > 0 and len(remaining) > 0:
+                logger.debug(f"Buffer advanced by {pos}, {len(remaining)} bytes remaining")
+
+        return frames_found
+
+    def _find_next_header(self, buf: bytearray, start: int, end: int) -> int:
+        """Find next 0xA0 header in buffer range."""
+        for i in range(start, min(end, len(buf))):
+            if buf[i] == 0xA0:
+                return i
+        return -1
 
     def _parse_frame(self, frame: bytes):
         """Parse a single frame."""
+        if len(frame) < 5:
+            logger.debug(f"Frame too short: {len(frame)} bytes")
+            return
+
         length = frame[1]
+        addr = frame[2]
         cmd = frame[3]
         data_len = max(0, length - 3)
+
+        # Validate frame structure
+        expected_len = 2 + length
+        if len(frame) != expected_len:
+            logger.debug(f"Frame length mismatch: expected {expected_len}, got {len(frame)}")
+            return
+
         data = frame[4:4 + data_len] if data_len > 0 else b''
+
+        logger.debug(f"Parsing frame: addr=0x{addr:02X}, cmd=0x{cmd:02X}, data_len={data_len}")
 
         if cmd == 0x8B:
             self._parse_tag_data_bytes(data)
+        elif cmd == 0x8A:
+            logger.debug("Received inventory stop response")
+        else:
+            logger.debug(f"Unknown command: 0x{cmd:02X}")
 
     def _parse_tag_data_bytes(self, data: bytes):
-        """Parse tag data from frame."""
+        """
+        Parse tag data from frame.
+
+        Frame format (per tag):
+        - freq_ant (1 byte): frequency and antenna info
+        - PC (2 bytes): Protocol Control word
+        - EPC (variable): Electronic Product Code
+        - RSSI (1 byte): Signal strength
+        """
         pos = 0
+        tag_count = 0
+
         while pos < len(data):
-            if pos + 4 > len(data):
+            # Need at least: freq_ant (1) + PC (2) + minimal EPC (2) + RSSI (1) = 6 bytes
+            if pos + 6 > len(data):
+                logger.debug(f"Insufficient data for tag at pos {pos}: {len(data) - pos} bytes remaining")
                 break
 
             freq_ant = data[pos]
             pos += 1
             antenna = (freq_ant & 0x03) + 1
 
+            # Parse PC (Protocol Control)
+            if pos + 2 > len(data):
+                logger.debug(f"Insufficient data for PC at pos {pos}")
+                break
+
             pc_byte1 = data[pos]
             pc_byte2 = data[pos + 1]
             pos += 2
             pc_value = (pc_byte1 << 8) | pc_byte2
 
+            # EPC length from PC: bits 10-14 (number of 16-bit words)
             epc_word_len = (pc_value >> 11) & 0x1F
             epc_byte_len = epc_word_len * 2
 
-            if pos + epc_byte_len > len(data):
+            # Validate EPC length
+            if epc_byte_len < 2 or epc_byte_len > 62:  # Reasonable EPC length range
+                logger.debug(f"Invalid EPC length from PC: {epc_word_len} words ({epc_byte_len} bytes)")
+                # Try to continue parsing from next byte
+                pos -= 2  # Back up to re-sync
+                pos += 1
+                continue
+
+            # Check if we have enough data for EPC + RSSI
+            if pos + epc_byte_len + 1 > len(data):
+                logger.debug(f"Insufficient data for EPC at pos {pos}: need {epc_byte_len + 1}, have {len(data) - pos}")
                 break
 
             epc_data = data[pos: pos + epc_byte_len]
             pos += epc_byte_len
 
-            if pos >= len(data):
-                break
-
             rssi_byte = data[pos]
             pos += 1
 
+            # Convert to hex and validate
             epc_hex = epc_data.hex().upper()
+            rssi_dbm = self._rssi_to_dbm(rssi_byte)
+
             if self._validate_epc(epc_hex) and epc_hex not in IGNORED_TAGS:
                 self.work_mode_tags.add(epc_hex)
+                tag_count += 1
+                logger.debug(f"Tag found: EPC={epc_hex}, Ant={antenna}, RSSI={rssi_dbm}dBm")
+            else:
+                logger.debug(f"Invalid or ignored tag: {epc_hex}")
+
+        if tag_count > 0:
+            logger.debug(f"Parsed {tag_count} tags from frame")
+
+    def _rssi_to_dbm(self, rssi_byte: int) -> int:
+        """Convert RSSI byte to dBm value."""
+        # RSSI is typically represented as a signed value
+        if rssi_byte > 127:
+            return rssi_byte - 256
+        return rssi_byte
 
     def _validate_epc(self, epc_hex: str) -> bool:
         """Validate EPC data."""
@@ -517,6 +709,9 @@ class RaspberryPiHardware(HardwareInterface):
         self._hid_reader = None
         self._nfc_mode = nfc_mode
         self._strip = None
+        # Cache for cross-read data (when NFC is read during QR read or vice versa)
+        self._last_read_data = None
+        self._last_read_type = None
 
     def initialize(self) -> None:
         """Initialize hardware components."""
@@ -588,36 +783,115 @@ class RaspberryPiHardware(HardwareInterface):
 
     def read_nfc(self, timeout: float = 30.0) -> Optional[str]:
         """Read NFC card UID."""
-        if self._hid_reader and self._hid_reader.is_available():
-            return self._hid_reader.read_card(timeout=timeout)
-
-        if not self._nfc_reader:
-            return None
-
         start_time = time.time()
+
         while time.time() - start_time < timeout:
-            uid = self._nfc_reader.read_nfc_card()
-            if uid:
-                return uid
+            # Try HID reader first (most common in production)
+            if self._hid_reader and self._hid_reader.is_available():
+                raw = self._hid_reader.read_card(timeout=min(1.0, timeout - (time.time() - start_time)))
+                if raw:
+                    # Clean and detect type
+                    cleaned = NFCQRReader.clean_hid_input(raw)
+                    card_type = NFCQRReader._detect_card_type(cleaned)
+
+                    if card_type == 'nfc':
+                        logger.info(f"NFC card detected (HID): {cleaned}")
+                        return cleaned
+                    else:
+                        logger.debug(f"QR code detected but read_nfc called: {cleaned[:20]}...")
+                        # Store for potential QR read
+                        self._last_read_data = cleaned
+                        self._last_read_type = 'qr'
+                continue
+
+            # Try serial reader
+            if self._nfc_reader and self._nfc_reader.is_connected():
+                result = self._nfc_reader.read_card()
+                if result:
+                    if result['type'] == 'nfc':
+                        return result['data']
+                    else:
+                        # Store for QR read
+                        self._last_read_data = result['data']
+                        self._last_read_type = 'qr'
+
             time.sleep(0.1)
 
         return None
 
     def read_qr(self, timeout: float = 30.0) -> Optional[str]:
         """Read QR code."""
-        if self._hid_reader and self._hid_reader.is_available():
-            result = self._hid_reader.read_card(timeout=timeout)
-            if result:
-                return result
-
-        if not self._nfc_reader:
-            return None
-
         start_time = time.time()
+
+        # Check if we have cached QR data from previous read
+        if hasattr(self, '_last_read_data') and getattr(self, '_last_read_type', None) == 'qr':
+            data = self._last_read_data
+            self._last_read_data = None
+            self._last_read_type = None
+            logger.info(f"QR code returned from cache: {data[:30]}...")
+            return data
+
         while time.time() - start_time < timeout:
-            qr = self._nfc_reader.read_qr_code()
-            if qr:
-                return qr
+            # Try HID reader first
+            if self._hid_reader and self._hid_reader.is_available():
+                raw = self._hid_reader.read_card(timeout=min(1.0, timeout - (time.time() - start_time)))
+                if raw:
+                    # Clean and detect type
+                    cleaned = NFCQRReader.clean_hid_input(raw)
+                    card_type = NFCQRReader._detect_card_type(cleaned)
+
+                    if card_type == 'qr':
+                        logger.info(f"QR code detected (HID): {cleaned[:30]}...")
+                        return cleaned
+                    else:
+                        logger.debug(f"NFC card detected but read_qr called: {cleaned}")
+                        # Store for potential NFC read
+                        self._last_read_data = cleaned
+                        self._last_read_type = 'nfc'
+                continue
+
+            # Try serial reader
+            if self._nfc_reader and self._nfc_reader.is_connected():
+                result = self._nfc_reader.read_card()
+                if result:
+                    if result['type'] == 'qr':
+                        return result['data']
+                    else:
+                        # Store for NFC read
+                        self._last_read_data = result['data']
+                        self._last_read_type = 'nfc'
+
+            time.sleep(0.1)
+
+        return None
+
+    def read_card_auto(self, timeout: float = 30.0) -> Optional[Dict[str, str]]:
+        """
+        Read card and automatically detect type (NFC or QR).
+
+        Returns:
+            Dict with 'type' ('nfc' or 'qr') and 'data' keys,
+            or None if timeout
+        """
+        start_time = time.time()
+
+        while time.time() - start_time < timeout:
+            # Try HID reader first
+            if self._hid_reader and self._hid_reader.is_available():
+                raw = self._hid_reader.read_card(timeout=min(1.0, timeout - (time.time() - start_time)))
+                if raw:
+                    cleaned = NFCQRReader.clean_hid_input(raw)
+                    card_type = NFCQRReader._detect_card_type(cleaned)
+                    logger.info(f"Card detected (HID): type={card_type}, data={cleaned[:30]}...")
+                    return {'type': card_type, 'data': cleaned}
+                continue
+
+            # Try serial reader
+            if self._nfc_reader and self._nfc_reader.is_connected():
+                result = self._nfc_reader.read_card()
+                if result:
+                    return result
+
             time.sleep(0.1)
 
         return None
