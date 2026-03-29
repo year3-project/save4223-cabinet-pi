@@ -285,18 +285,17 @@ class RFIDReader:
             return False
 
     def _checksum(self, data: bytes) -> int:
-        """Calculate checksum."""
-        uSum = 0
-        for byte in data:
-            uSum = (uSum + (byte & 0xFF)) & 0xFF
-        return ((~uSum) + 1) & 0xFF
+        """Calculate checksum - sum from Len byte to end, result & 0xFF == 0."""
+        total = sum(b & 0xFF for b in data)
+        return ((-total) & 0xFF)
 
     def _build_packet(self, cmd: int, data: bytes = b'') -> bytes:
         """Build protocol packet."""
-        length = 1 + 1 + len(data) + 1
-        packet_wo_checksum = bytes([0xA0, length & 0xFF, RFID_ADDRESS & 0xFF, cmd & 0xFF]) + data
-        cs = self._checksum(packet_wo_checksum)
-        return packet_wo_checksum + bytes([cs])
+        length = 2 + len(data)  # Addr(1) + Cmd(1) + Data(N)
+        # Checksum covers Len + Addr + Cmd + Data (excluding 0xA0 frame header)
+        payload_for_cs = bytes([length & 0xFF, RFID_ADDRESS & 0xFF, cmd & 0xFF]) + data
+        cs = self._checksum(payload_for_cs)
+        return bytes([0xA0]) + payload_for_cs + bytes([cs])
 
     def read_rfid_tags_multiple(self) -> List[str]:
         """Read RFID tags multiple times (work mode)."""
@@ -304,6 +303,7 @@ class RFIDReader:
             return []
 
         self.work_mode_tags.clear()
+        self._recv_buffer.clear()  # Bug fix: clear stale buffer
         self.current_cycle = 0
         self.reading = True
 
@@ -528,7 +528,8 @@ class RFIDReader:
             # Extract and validate frame
             frame = bytes(buf[pos: pos + frame_total_len])
             received_cs = frame[-1]
-            calc_cs = self._checksum(frame[:-1])
+            # Checksum covers Len to Data (excluding 0xA0 header and checksum byte)
+            calc_cs = self._checksum(frame[1:-1])
 
             if received_cs != calc_cs:
                 logger.debug(f"Checksum mismatch at pos {pos}: received {received_cs:02X}, calc {calc_cs:02X}")
@@ -587,7 +588,16 @@ class RFIDReader:
         logger.debug(f"Parsing frame: addr=0x{addr:02X}, cmd=0x{cmd:02X}, data_len={data_len}")
 
         if cmd == 0x8B:
-            self._parse_tag_data_bytes(data)
+            # Customized Session Target Inventory response
+            if len(data) < 1:
+                return
+            status = data[0]
+            if status == 0x10:  # SUCCESS - has tag data
+                self._parse_tag_data_bytes(data[1:])  # Skip status byte
+            elif status == 0x36:  # NO_TAG_ERROR - end of inventory round, normal
+                logger.debug("Inventory round complete (no more tags)")
+            else:
+                logger.debug(f"Inventory status: 0x{status:02X}")
         elif cmd == 0x8A:
             logger.debug("Received inventory stop response")
         else:
@@ -597,32 +607,33 @@ class RFIDReader:
         """
         Parse tag data from frame.
 
-        Frame format (per tag):
-        - freq_ant (1 byte): frequency and antenna info
-        - PC (2 bytes): Protocol Control word
-        - EPC (variable): Electronic Product Code
+        Frame format (per tag, after status byte 0x10):
         - RSSI (1 byte): Signal strength
+        - PC (2 bytes): Protocol Control word
+        - EPC (variable): Electronic Product Code (length from PC)
+        - Freq (3 bytes): Frequency info
+        - AntID (1 byte): Antenna ID
         """
         pos = 0
         tag_count = 0
 
         while pos < len(data):
-            # Need at least: freq_ant (1) + PC (2) + minimal EPC (2) + RSSI (1) = 6 bytes
-            if pos + 6 > len(data):
+            # Need at least: RSSI(1) + PC(2) + minimal EPC(2) = 5 bytes
+            if pos + 5 > len(data):
                 logger.debug(f"Insufficient data for tag at pos {pos}: {len(data) - pos} bytes remaining")
                 break
 
-            freq_ant = data[pos]
+            # RSSI byte
+            rssi_byte = data[pos]
             pos += 1
-            antenna = (freq_ant & 0x03) + 1
 
             # Parse PC (Protocol Control)
             if pos + 2 > len(data):
                 logger.debug(f"Insufficient data for PC at pos {pos}")
                 break
 
-            pc_byte1 = data[pos]
-            pc_byte2 = data[pos + 1]
+            pc_byte1 = data[pos]      # PC high byte
+            pc_byte2 = data[pos + 1]  # PC low byte
             pos += 2
             pc_value = (pc_byte1 << 8) | pc_byte2
 
@@ -634,19 +645,24 @@ class RFIDReader:
             if epc_byte_len < 2 or epc_byte_len > 62:  # Reasonable EPC length range
                 logger.debug(f"Invalid EPC length from PC: {epc_word_len} words ({epc_byte_len} bytes)")
                 # Try to continue parsing from next byte
-                pos -= 2  # Back up to re-sync
+                pos -= 3  # Back up to re-sync
                 pos += 1
                 continue
 
-            # Check if we have enough data for EPC + RSSI
-            if pos + epc_byte_len + 1 > len(data):
-                logger.debug(f"Insufficient data for EPC at pos {pos}: need {epc_byte_len + 1}, have {len(data) - pos}")
+            # Check if we have enough data for EPC + Freq(3) + AntID(1)
+            if pos + epc_byte_len + 4 > len(data):
+                logger.debug(f"Insufficient data for EPC at pos {pos}: need {epc_byte_len + 4}, have {len(data) - pos}")
                 break
 
             epc_data = data[pos: pos + epc_byte_len]
             pos += epc_byte_len
 
-            rssi_byte = data[pos]
+            # Skip Freq (3 bytes)
+            pos += 3
+
+            # Antenna ID
+            ant_id = data[pos]
+            antenna = (ant_id & 0x03) + 1
             pos += 1
 
             # Convert to hex and validate
