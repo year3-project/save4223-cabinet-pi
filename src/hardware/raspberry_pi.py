@@ -285,17 +285,19 @@ class RFIDReader:
             return False
 
     def _checksum(self, data: bytes) -> int:
-        """Calculate checksum - sum from Len byte to end, result & 0xFF == 0."""
-        total = sum(b & 0xFF for b in data)
-        return ((-total) & 0xFF)
+        """Calculate checksum - includes 0xA0 frame header for compatibility."""
+        uSum = 0
+        for byte in data:
+            uSum = (uSum + (byte & 0xFF)) & 0xFF
+        return ((~uSum) + 1) & 0xFF
 
     def _build_packet(self, cmd: int, data: bytes = b'') -> bytes:
         """Build protocol packet."""
         length = 2 + len(data)  # Addr(1) + Cmd(1) + Data(N)
-        # Checksum covers Len + Addr + Cmd + Data (excluding 0xA0 frame header)
-        payload_for_cs = bytes([length & 0xFF, RFID_ADDRESS & 0xFF, cmd & 0xFF]) + data
-        cs = self._checksum(payload_for_cs)
-        return bytes([0xA0]) + payload_for_cs + bytes([cs])
+        # NOTE: Device expects 0xA0 to be included in checksum (non-standard)
+        packet_wo_checksum = bytes([0xA0, length & 0xFF, RFID_ADDRESS & 0xFF, cmd & 0xFF]) + data
+        cs = self._checksum(packet_wo_checksum)
+        return packet_wo_checksum + bytes([cs])
 
     def read_rfid_tags_multiple(self) -> List[str]:
         """Read RFID tags multiple times (work mode)."""
@@ -528,8 +530,8 @@ class RFIDReader:
             # Extract and validate frame
             frame = bytes(buf[pos: pos + frame_total_len])
             received_cs = frame[-1]
-            # Checksum covers Len to Data (excluding 0xA0 header and checksum byte)
-            calc_cs = self._checksum(frame[1:-1])
+            # NOTE: Device sends checksum that includes 0xA0 (non-standard)
+            calc_cs = self._checksum(frame[:-1])
 
             if received_cs != calc_cs:
                 logger.debug(f"Checksum mismatch at pos {pos}: received {received_cs:02X}, calc {calc_cs:02X}")
