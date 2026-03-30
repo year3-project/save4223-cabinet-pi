@@ -590,16 +590,7 @@ class RFIDReader:
         logger.debug(f"Parsing frame: addr=0x{addr:02X}, cmd=0x{cmd:02X}, data_len={data_len}")
 
         if cmd == 0x8B:
-            # Customized Session Target Inventory response
-            if len(data) < 1:
-                return
-            status = data[0]
-            if status == 0x10:  # SUCCESS - has tag data
-                self._parse_tag_data_bytes(data[1:])  # Skip status byte
-            elif status == 0x36:  # NO_TAG_ERROR - end of inventory round, normal
-                logger.debug("Inventory round complete (no more tags)")
-            else:
-                logger.debug(f"Inventory status: 0x{status:02X}")
+            self._parse_tag_data_bytes(data)
         elif cmd == 0x8A:
             logger.debug("Received inventory stop response")
         else:
@@ -609,84 +600,44 @@ class RFIDReader:
         """
         Parse tag data from frame.
 
-        Frame format (per tag, after status byte 0x10):
-        - RSSI (1 byte): Signal strength
+        Frame format (per tag):
+        - freq_ant (1 byte): frequency and antenna info
         - PC (2 bytes): Protocol Control word
-        - EPC (variable): Electronic Product Code (length from PC)
-        - Freq (3 bytes): Frequency info
-        - AntID (1 byte): Antenna ID
+        - EPC (variable): Electronic Product Code
+        - RSSI (1 byte): Signal strength
         """
         pos = 0
-        tag_count = 0
 
         while pos < len(data):
-            # Need at least: RSSI(1) + PC(2) + minimal EPC(2) = 5 bytes
-            if pos + 5 > len(data):
-                logger.debug(f"Insufficient data for tag at pos {pos}: {len(data) - pos} bytes remaining")
+            if pos + 6 > len(data):
                 break
 
-            # RSSI byte
-            rssi_byte = data[pos]
+            freq_ant = data[pos]
             pos += 1
 
-            # Parse PC (Protocol Control)
-            if pos + 2 > len(data):
-                logger.debug(f"Insufficient data for PC at pos {pos}")
-                break
-
-            pc_byte1 = data[pos]      # PC high byte
-            pc_byte2 = data[pos + 1]  # PC low byte
+            pc_byte1 = data[pos]
+            pc_byte2 = data[pos + 1]
             pos += 2
             pc_value = (pc_byte1 << 8) | pc_byte2
 
-            # EPC length from PC: bits 10-14 (number of 16-bit words)
             epc_word_len = (pc_value >> 11) & 0x1F
             epc_byte_len = epc_word_len * 2
 
-            # Validate EPC length
-            if epc_byte_len < 2 or epc_byte_len > 62:  # Reasonable EPC length range
-                logger.debug(f"Invalid EPC length from PC: {epc_word_len} words ({epc_byte_len} bytes)")
-                # Try to continue parsing from next byte
-                pos -= 3  # Back up to re-sync
-                pos += 1
-                continue
-
-            # Check if we have enough data for EPC + Freq(3) + AntID(1)
-            if pos + epc_byte_len + 4 > len(data):
-                logger.debug(f"Insufficient data for EPC at pos {pos}: need {epc_byte_len + 4}, have {len(data) - pos}")
+            if pos + epc_byte_len > len(data):
                 break
 
             epc_data = data[pos: pos + epc_byte_len]
             pos += epc_byte_len
 
-            # Skip Freq (3 bytes)
-            pos += 3
+            if pos >= len(data):
+                break
 
-            # Antenna ID
-            ant_id = data[pos]
-            antenna = (ant_id & 0x03) + 1
+            rssi_byte = data[pos]
             pos += 1
 
-            # Convert to hex and validate
             epc_hex = epc_data.hex().upper()
-            rssi_dbm = self._rssi_to_dbm(rssi_byte)
-
             if self._validate_epc(epc_hex) and epc_hex not in IGNORED_TAGS:
                 self.work_mode_tags.add(epc_hex)
-                tag_count += 1
-                logger.debug(f"Tag found: EPC={epc_hex}, Ant={antenna}, RSSI={rssi_dbm}dBm")
-            else:
-                logger.debug(f"Invalid or ignored tag: {epc_hex}")
-
-        if tag_count > 0:
-            logger.debug(f"Parsed {tag_count} tags from frame")
-
-    def _rssi_to_dbm(self, rssi_byte: int) -> int:
-        """Convert RSSI byte to dBm value."""
-        # RSSI is typically represented as a signed value
-        if rssi_byte > 127:
-            return rssi_byte - 256
-        return rssi_byte
 
     def _validate_epc(self, epc_hex: str) -> bool:
         """Validate EPC data."""
