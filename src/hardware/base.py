@@ -84,20 +84,22 @@ class HardwareInterface(ABC):
         idle_break_timeout: Optional[float] = None,
         max_cycle_wait: Optional[float] = None,
         log_each_cycle: bool = False,
+        scan_duration: Optional[float] = None,
     ) -> List[str]:
         """
         Read RFID tags with voting for accuracy. Default implementation
         falls back to a single read_rfid_tags call (sufficient for mock/test).
 
-        Real hardware overrides this with multi-cycle voting logic.
+        Real hardware overrides this with continuous scan + time-window voting.
 
         Args:
-            total_cycles: Total number of scan cycles (default 10)
+            total_cycles: Used to calculate scan_duration if not provided
             min_appearances: Minimum appearances to confirm a tag (default 3)
-            read_interval: Seconds between cycles (None uses hardware default)
+            read_interval: Used for scan_duration calculation
             idle_break_timeout: Seconds of inactivity before a cycle ends
             max_cycle_wait: Max seconds to wait for data in one cycle
             log_each_cycle: Log tags found on each cycle
+            scan_duration: Direct override for scan duration in seconds
 
         Returns:
             List of confirmed RFID tag UIDs

@@ -269,6 +269,7 @@ class RFIDReader:
         self._recv_buffer = bytearray()
         self._idle_break_timeout = 0.2
         self._max_cycle_wait = 2.0
+        self._tag_callback = None  # Optional callback for tag detection
 
     def connect(self) -> bool:
         """Connect to RFID reader."""
@@ -292,59 +293,27 @@ class RFIDReader:
         return ((~uSum) + 1) & 0xFF
 
     def _build_packet(self, cmd: int, data: bytes = b'') -> bytes:
-        """Build protocol packet."""
-        length = 2 + len(data)  # Addr(1) + Cmd(1) + Data(N)
+        """Build protocol packet.
+
+        Frame format: [0xA0][Len][Addr][Cmd][Data...][Checksum]
+        where Len = Addr(1) + Cmd(1) + Data(N) + Check(1) = len(data) + 3
+        """
+        length = len(data) + 3  # Addr(1) + Cmd(1) + Data(N) + Check(1)
         # NOTE: Device expects 0xA0 to be included in checksum (non-standard)
         packet_wo_checksum = bytes([0xA0, length & 0xFF, RFID_ADDRESS & 0xFF, cmd & 0xFF]) + data
         cs = self._checksum(packet_wo_checksum)
         return packet_wo_checksum + bytes([cs])
 
     def read_rfid_tags_multiple(self) -> List[str]:
-        """Read RFID tags multiple times (work mode)."""
-        if not self.connect():
-            return []
+        """
+        Read RFID tags multiple times (work mode).
 
-        self.work_mode_tags.clear()
-        self._recv_buffer.clear()  # Bug fix: clear stale buffer
-        self.current_cycle = 0
-        self.reading = True
-
-        logger.info(f"Starting RFID inventory - {self.work_mode_cycles} cycles")
-
-        try:
-            session = 0x01
-            target = 0x00
-            repeat = 0x01
-            cmd_payload = bytes([session, target, repeat])
-
-            while self.reading and self.current_cycle < self.work_mode_cycles:
-                before_cycle = set(self.work_mode_tags)
-
-                packet = self._build_packet(0x8B, cmd_payload)
-                if self.socket:
-                    self.socket.sendall(packet)
-
-                self._receive_and_process()
-
-                after_cycle = self.work_mode_tags
-                new_tags = after_cycle - before_cycle
-
-                if new_tags:
-                    logger.debug(f"[Cycle {self.current_cycle+1}] New tags: {list(new_tags)}")
-
-                self.current_cycle += 1
-                time.sleep(RFID_READ_INTERVAL)
-
-            tags_list = list(self.work_mode_tags)
-            logger.info(f"RFID inventory completed: {len(tags_list)} tags found")
-            return tags_list
-
-        except Exception as e:
-            logger.error(f"RFID read error: {e}")
-            return []
-        finally:
-            self.stop_reading()
-            self.disconnect()
+        Delegates to continuous scan to avoid command flooding issues.
+        """
+        scan_duration = self.work_mode_cycles * RFID_READ_INTERVAL
+        logger.info(f"Starting RFID inventory - {scan_duration:.1f}s continuous scan")
+        result = self.read_rfid_tags_continuous(scan_duration=scan_duration)
+        return result['tags']
 
     def read_rfid_tags_voting(
         self,
@@ -354,96 +323,82 @@ class RFIDReader:
         idle_break_timeout: Optional[float] = None,
         max_cycle_wait: Optional[float] = None,
         log_each_cycle: bool = False,
+        scan_duration: Optional[float] = None,
     ) -> List[str]:
         """
         Read RFID tags with voting mechanism for better accuracy.
 
-        A tag is considered present only if it appears in at least min_appearances
-        out of total_cycles scans. This reduces false positives from sporadic reads.
+        NEW IMPLEMENTATION: Uses time-window voting within a single continuous scan
+        instead of repeated command flooding. This preserves the voting API for
+        backward compatibility while fixing the command flooding issue.
+
+        Voting is now based on detection count over time:
+        - A tag must be detected at least min_appearances times during the scan
 
         Args:
-            total_cycles: Total number of scan cycles (default 10)
-            min_appearances: Minimum times a tag must appear to be considered present (default 3)
-            read_interval: Seconds between cycles (None uses hardware default)
-            idle_break_timeout: Seconds of inactivity before a cycle ends
-            max_cycle_wait: Max seconds to wait for data in one cycle
-            log_each_cycle: Log tags found on each cycle
+            total_cycles: Used to calculate scan_duration if not provided
+                         (scan_duration = total_cycles * read_interval)
+            min_appearances: Minimum detection count for a tag to be confirmed
+            read_interval: Used for scan_duration calculation (default 1.0s)
+            idle_break_timeout: Seconds of inactivity before breaking early
+            max_cycle_wait: Ignored (for backward compatibility)
+            log_each_cycle: Log tags found periodically
+            scan_duration: Direct override for scan duration in seconds
 
         Returns:
             List of tags that passed the voting threshold
         """
-        from collections import Counter
-
-        if not self.connect():
-            return []
-
-        # Clear any stale buffer data from a previous call
-        self._recv_buffer.clear()
-
-        tag_counter = Counter()
-        cycle = 0
-        self.reading = True
-
         interval = RFID_READ_INTERVAL if read_interval is None else read_interval
+
+        # Calculate scan duration from legacy parameters if not provided
+        if scan_duration is None:
+            scan_duration = total_cycles * interval
+
+        log_interval = interval if log_each_cycle else scan_duration
+
         prev_idle = self._idle_break_timeout
-        prev_max_wait = self._max_cycle_wait
         if idle_break_timeout is not None:
             self._idle_break_timeout = idle_break_timeout
-        if max_cycle_wait is not None:
-            self._max_cycle_wait = max_cycle_wait
-
-        logger.info(
-            "Starting RFID voting scan - %s cycles, need %s appearances (interval=%.2fs, idle=%.2fs, max_wait=%.2fs)",
-            total_cycles,
-            min_appearances,
-            interval,
-            self._idle_break_timeout,
-            self._max_cycle_wait,
-        )
 
         try:
-            session = 0x01
-            target = 0x00
-            repeat = 0x01
+            logger.info(
+                "Starting RFID voting scan - duration=%.1fs, need %s+ appearances",
+                scan_duration,
+                min_appearances,
+            )
 
-            while self.reading and cycle < total_cycles:
-                # Toggle target between 0x00 and 0x01 every cycle to capture inverted tags (Session 1)
-                target = 0x00 if cycle % 2 == 0 else 0x01
-                cmd_payload = bytes([session, target, repeat])
+            result = self.read_rfid_tags_continuous(
+                scan_duration=scan_duration,
+                toggle_target=True,
+                idle_break_timeout=idle_break_timeout,
+                log_interval=log_interval,
+            )
 
-                # Clear tags for this cycle to get fresh detection
-                self.work_mode_tags.clear()
+            detected_tags = result['tags']
+            tag_count = result['tag_count']
 
-                packet = self._build_packet(0x8B, cmd_payload)
-                if self.socket:
-                    self.socket.sendall(packet)
+            # Apply voting threshold based on detection count
+            confirmed_tags = [
+                tag for tag in detected_tags
+                if tag_count.get(tag, 0) >= min_appearances
+            ]
 
-                # Receive for this cycle
-                self._receive_and_process()
-                cycle_tags = set(self.work_mode_tags)
+            # If voting threshold is too aggressive and yields no results,
+            # fall back to all detected tags with at least 1 detection
+            if not confirmed_tags and detected_tags:
+                logger.warning(
+                    "Voting threshold (%d) filtered all tags, "
+                    "falling back to single detection mode",
+                    min_appearances,
+                )
+                confirmed_tags = detected_tags
 
-                # Count each tag found in this cycle
-                for tag in cycle_tags:
-                    tag_counter[tag] += 1
-
-                if log_each_cycle:
-                    logger.info(
-                        "[RFID] Cycle %s/%s -> %s",
-                        cycle + 1,
-                        total_cycles,
-                        sorted(cycle_tags),
-                    )
-                else:
-                    logger.debug(f"[Cycle {cycle+1}/{total_cycles}] Found: {list(cycle_tags)}")
-                cycle += 1
-                time.sleep(interval)
-
-            # Apply voting threshold - tag must appear at least min_appearances times
-            confirmed_tags = [tag for tag, count in tag_counter.items() if count >= min_appearances]
-
-            logger.info(f"RFID voting completed: {len(confirmed_tags)} confirmed tags (from {len(tag_counter)} unique)")
-            logger.info(f"Tag appearances: {dict(tag_counter)}")
-            logger.info(f"Confirmed tags: {confirmed_tags}")
+            logger.info(
+                "RFID voting complete: %d confirmed (from %d detected, threshold=%d)",
+                len(confirmed_tags), len(detected_tags), min_appearances,
+            )
+            logger.info("Tag detection counts: %s", tag_count)
+            logger.info("Confirmed tags: %s", confirmed_tags)
 
             return confirmed_tags
 
@@ -452,7 +407,128 @@ class RFIDReader:
             return []
         finally:
             self._idle_break_timeout = prev_idle
-            self._max_cycle_wait = prev_max_wait
+
+    def read_rfid_tags_continuous(
+        self,
+        scan_duration: float = 5.0,
+        toggle_target: bool = True,
+        idle_break_timeout: Optional[float] = None,
+        log_interval: float = 0.5,
+    ) -> Dict[str, Any]:
+        """
+        Send ONE inventory command and listen continuously for scan_duration seconds.
+
+        This is the recommended approach per protocol manual - let the reader's
+        anti-collision algorithm stabilize for maximum detection efficiency.
+
+        Args:
+            scan_duration: Total seconds to listen for tags (default 5.0)
+            toggle_target: If True, toggle Target A/B halfway to catch inverted tags
+            idle_break_timeout: Seconds of silence before breaking early (None = no break)
+            log_interval: Seconds between progress log messages
+
+        Returns:
+            Dict with 'tags', 'tag_count', 'bytes_received', 'frames_parsed'
+        """
+        from collections import defaultdict
+
+        if not self.connect():
+            return {'tags': [], 'tag_count': {}, 'bytes_received': 0, 'frames_parsed': 0}
+
+        self._recv_buffer.clear()
+        self.work_mode_tags.clear()
+
+        tag_count: Dict[str, int] = defaultdict(int)
+        bytes_received = 0
+        frames_parsed = 0
+
+        def on_tag_detected(epc: str):
+            tag_count[epc] += 1
+
+        self._tag_callback = on_tag_detected
+        self.reading = True
+        idle_timeout = idle_break_timeout or self._idle_break_timeout
+
+        logger.info(f"Starting continuous RFID scan for {scan_duration}s")
+
+        try:
+            start_time = time.time()
+            last_data_time = start_time
+            last_log_time = start_time
+
+            # Send inventory command ONCE with Target A
+            session = 0x01
+            target = 0x00
+            repeat = 0x01
+            cmd_payload = bytes([session, target, repeat])
+            packet = self._build_packet(0x8B, cmd_payload)
+            if self.socket:
+                self.socket.sendall(packet)
+
+            target_b_sent = False
+
+            while self.reading:
+                elapsed = time.time() - start_time
+                if elapsed >= scan_duration:
+                    break
+
+                # Toggle target halfway if enabled
+                if toggle_target and not target_b_sent and elapsed >= scan_duration / 2:
+                    cmd_payload_b = bytes([session, 0x01, repeat])
+                    packet_b = self._build_packet(0x8B, cmd_payload_b)
+                    if self.socket:
+                        self.socket.sendall(packet_b)
+                    target_b_sent = True
+                    logger.debug("Sent Target B inventory command at %.1fs", elapsed)
+
+                try:
+                    self.socket.settimeout(0.1)
+                    data = self.socket.recv(8192)  # Increased buffer size
+                    if data:
+                        last_data_time = time.time()
+                        bytes_received += len(data)
+                        self._recv_buffer.extend(data)
+                        frames_parsed += self._extract_frames_from_buffer()
+
+                        if time.time() - last_log_time >= log_interval:
+                            logger.debug(
+                                "RFID scan progress: %.1fs, %d unique tags, %d bytes",
+                                elapsed, len(tag_count), bytes_received,
+                            )
+                            last_log_time = time.time()
+                    else:
+                        if idle_timeout and (time.time() - last_data_time) > idle_timeout:
+                            logger.debug("RFID idle break after %.1fs", elapsed)
+                            break
+                except socket.timeout:
+                    if idle_timeout and (time.time() - last_data_time) > idle_timeout:
+                        logger.debug("RFID idle break (socket timeout) after %.1fs", elapsed)
+                        break
+                    continue
+                except Exception as e:
+                    logger.error(f"RFID receive error: {e}")
+                    break
+
+            total_time = time.time() - start_time
+            detected_tags = list(self.work_mode_tags)
+
+            logger.info(
+                "RFID continuous scan complete: %.1fs, %d tags, %d bytes, %d frames",
+                total_time, len(detected_tags), bytes_received, frames_parsed,
+            )
+
+            return {
+                'tags': detected_tags,
+                'tag_count': dict(tag_count),
+                'bytes_received': bytes_received,
+                'frames_parsed': frames_parsed,
+            }
+
+        except Exception as e:
+            logger.error(f"RFID continuous scan error: {e}")
+            return {'tags': [], 'tag_count': {}, 'bytes_received': bytes_received, 'frames_parsed': frames_parsed}
+        finally:
+            self._tag_callback = None
             self.stop_reading()
             self.disconnect()
 
@@ -491,7 +567,11 @@ class RFIDReader:
 
     def _extract_frames_from_buffer(self) -> int:
         """
-        Extract frames from receive buffer.
+        Extract frames from receive buffer with robust error recovery.
+
+        Improvement: On checksum failure, use Len field to skip the entire
+        failed frame instead of advancing pos by only 1. This prevents cascade
+        alignment loss in high-throughput scenarios.
 
         Returns:
             Number of valid frames extracted
@@ -499,7 +579,7 @@ class RFIDReader:
         buf = self._recv_buffer
         pos = 0
         frames_found = 0
-        MAX_FRAME_LEN = 256  # Maximum reasonable frame length
+        MAX_FRAME_LEN = 256
 
         while pos + 5 <= len(buf):
             # Look for frame header 0xA0
@@ -516,14 +596,12 @@ class RFIDReader:
 
             # Sanity check: frame length should be reasonable
             if length < 3 or frame_total_len > MAX_FRAME_LEN:
-                # Invalid length, skip this potential header and continue searching
-                logger.debug(f"Invalid frame length {length} at pos {pos}, skipping")
-                pos += 1
+                logger.debug(f"Invalid frame length {length} at pos {pos}, skipping header")
+                pos += 1  # Skip this 0xA0 and look for next
                 continue
 
             # Check if we have the complete frame
             if pos + frame_total_len > len(buf):
-                # Incomplete frame, keep buffer for next receive
                 logger.debug(f"Incomplete frame: need {frame_total_len}, have {len(buf) - pos}")
                 break
 
@@ -534,13 +612,18 @@ class RFIDReader:
             calc_cs = self._checksum(frame[:-1])
 
             if received_cs != calc_cs:
-                logger.debug(f"Checksum mismatch at pos {pos}: received {received_cs:02X}, calc {calc_cs:02X}")
-                # Try to find next frame header within this failed frame
+                logger.debug(
+                    "Checksum mismatch at pos %d: received 0x%02X, calc 0x%02X, frame: %s",
+                    pos, received_cs, calc_cs, frame[:min(20, len(frame))].hex(),
+                )
+                # Strategy 1: Look for next 0xA0 within this failed frame
                 next_a0 = self._find_next_header(buf, pos + 1, pos + frame_total_len)
                 if next_a0 > 0:
                     pos = next_a0
                 else:
-                    pos += 1
+                    # Strategy 2: Skip entire failed frame using Len field
+                    # This is the key improvement - prevents cascade alignment loss
+                    pos += frame_total_len
                 continue
 
             # Valid frame found, parse it
@@ -554,10 +637,7 @@ class RFIDReader:
 
         # Keep unprocessed bytes in buffer
         if pos > 0:
-            remaining = buf[pos:]
-            self._recv_buffer = bytearray(remaining)
-            if pos > 0 and len(remaining) > 0:
-                logger.debug(f"Buffer advanced by {pos}, {len(remaining)} bytes remaining")
+            self._recv_buffer = bytearray(buf[pos:])
 
         return frames_found
 
@@ -638,6 +718,8 @@ class RFIDReader:
             epc_hex = epc_data.hex().upper()
             if self._validate_epc(epc_hex) and epc_hex not in IGNORED_TAGS:
                 self.work_mode_tags.add(epc_hex)
+                if self._tag_callback:
+                    self._tag_callback(epc_hex)
 
     def _validate_epc(self, epc_hex: str) -> bool:
         """Validate EPC data."""
@@ -882,16 +964,19 @@ class RaspberryPiHardware(HardwareInterface):
         idle_break_timeout: Optional[float] = None,
         max_cycle_wait: Optional[float] = None,
         log_each_cycle: bool = False,
+        scan_duration: Optional[float] = None,
     ) -> List[str]:
         """
         Read RFID tags with voting mechanism for better accuracy.
 
-        A tag is considered present only if it appears in at least min_appearances
-        out of total_cycles scans. This reduces false positives from sporadic reads.
-
         Args:
-            total_cycles: Total number of scan cycles (default 10)
-            min_appearances: Minimum times a tag must appear to be considered present (default 3)
+            total_cycles: Used to calculate scan_duration if not provided
+            min_appearances: Minimum detection count for a tag to be confirmed
+            read_interval: Used for scan_duration calculation
+            idle_break_timeout: Seconds of inactivity before breaking early
+            max_cycle_wait: Ignored (for backward compatibility)
+            log_each_cycle: Log tags found periodically
+            scan_duration: Direct override for scan duration in seconds
 
         Returns:
             List of tags that passed the voting threshold
@@ -906,6 +991,7 @@ class RaspberryPiHardware(HardwareInterface):
             idle_break_timeout=idle_break_timeout,
             max_cycle_wait=max_cycle_wait,
             log_each_cycle=log_each_cycle,
+            scan_duration=scan_duration,
         )
 
     def unlock_drawer(self, drawer_id: int) -> bool:

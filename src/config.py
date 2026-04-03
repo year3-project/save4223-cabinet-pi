@@ -29,13 +29,14 @@ DEFAULT_CONFIG = {
     'api_timeout': 5,       # seconds
     'api_retry_count': 3,
 
-    # RFID scan tuning (voting mode)
+    # RFID scan tuning (now uses continuous scan with time-window voting)
     'rfid': {
         'voting_cycles': 10,
-        'min_appearances': 3,
-        'read_interval': 1.0,
-        'idle_break_timeout': 0.2,
-        'max_cycle_wait': 2.0,
+        'min_appearances': 2,
+        'read_interval': 0.5,
+        'idle_break_timeout': 0.5,
+        'max_cycle_wait': 5.0,
+        'scan_duration': None,  # Override: None = voting_cycles * read_interval
     },
 
     # Cache settings
@@ -65,9 +66,9 @@ DEFAULT_CONFIG = {
         'port': 8080,
     },
 
-    # Hardware mode: 'mock' for testing, 'raspberry_pi' for production
+    # Hardware mode: 'raspberry_pi' for production
     'hardware': {
-        'mode': 'mock',
+        'mode': 'raspberry_pi',
     },
 }
 

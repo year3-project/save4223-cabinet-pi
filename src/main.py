@@ -746,6 +746,7 @@ class SmartCabinet:
         idle_break_timeout = rfid_cfg.get('idle_break_timeout', 0.2)
         max_cycle_wait = rfid_cfg.get('max_cycle_wait', 2.0)
         log_each_cycle = rfid_cfg.get('log_each_cycle', False)
+        scan_duration = rfid_cfg.get('scan_duration', None)
 
         logger.info(
             "Starting RFID voting scan (%s cycles, need %s+ appearances)",
@@ -759,6 +760,7 @@ class SmartCabinet:
             idle_break_timeout=idle_break_timeout,
             max_cycle_wait=max_cycle_wait,
             log_each_cycle=log_each_cycle,
+            scan_duration=scan_duration,
         )
         logger.info(f"RFID voting scan complete: {len(result)} confirmed tags")
         return result
