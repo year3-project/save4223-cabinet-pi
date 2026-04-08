@@ -259,7 +259,7 @@ class RFIDReader:
         self.current_cycle = 0
         self.work_mode_cycles = RFID_READ_CYCLES
         self._recv_buffer = bytearray()
-        self._idle_break_timeout = 0.2
+        self._idle_break_timeout = 2.0
         self._max_cycle_wait = 2.0
         self._tag_callback = None  # Optional callback for tag detection
 
@@ -476,6 +476,7 @@ class RFIDReader:
         self._tag_callback = on_tag_detected
         self.reading = True
         idle_timeout = idle_break_timeout or self._idle_break_timeout
+        startup_grace = 1.5  # Don't idle-break in the first N seconds (reader needs time to respond)
 
         logger.info(f"Starting continuous RFID scan for {scan_duration}s")
 
@@ -520,6 +521,7 @@ class RFIDReader:
                     if data:
                         last_data_time = time.time()
                         bytes_received += len(data)
+                        logger.debug("DEBUG: Received %d bytes: %s", len(data), data.hex())
                         self._recv_buffer.extend(data)
                         frames_parsed += self._extract_frames_from_buffer()
 
@@ -530,11 +532,11 @@ class RFIDReader:
                             )
                             last_log_time = time.time()
                     else:
-                        if idle_timeout and (time.time() - last_data_time) > idle_timeout:
+                        if idle_timeout and elapsed > startup_grace and (time.time() - last_data_time) > idle_timeout:
                             logger.debug("RFID idle break after %.1fs", elapsed)
                             break
                 except socket.timeout:
-                    if idle_timeout and (time.time() - last_data_time) > idle_timeout:
+                    if idle_timeout and elapsed > startup_grace and (time.time() - last_data_time) > idle_timeout:
                         logger.debug("RFID idle break (socket timeout) after %.1fs", elapsed)
                         break
                     continue

@@ -34,7 +34,7 @@ DEFAULT_CONFIG = {
         'voting_cycles': 10,
         'min_appearances': 2,
         'read_interval': 0.5,
-        'idle_break_timeout': 0.5,
+        'idle_break_timeout': 2.0,
         'max_cycle_wait': 5.0,
         'scan_duration': None,  # Override: None = voting_cycles * read_interval
     },
