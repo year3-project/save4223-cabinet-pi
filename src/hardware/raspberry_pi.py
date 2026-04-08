@@ -232,21 +232,13 @@ class NFCQRReader:
         Clean HID keyboard input by removing common noise patterns.
 
         HID readers often inject noise characters between keystrokes.
+        Uses regex to keep only alphanumeric characters.
         """
+        import re
         if not content:
             return ""
-
-        # Remove common HID reader noise characters
-        # 'M' is commonly inserted between keystrokes by some readers
-        cleaned = content.strip()
-        cleaned = cleaned.replace('M', '')
-
-        # Remove other common noise patterns
-        noise_chars = ['\x00', '\x01', '\x02', '\x03']
-        for char in noise_chars:
-            cleaned = cleaned.replace(char, '')
-
-        return cleaned.strip()
+        # Keep only letters and digits, discard all noise like 'M' or control chars
+        return re.sub(r'[^a-zA-Z0-9]', '', content)
 
     def close(self):
         """Close serial connection."""
@@ -279,6 +271,11 @@ class RFIDReader:
             self.socket.connect((self.host, self.port))
             self.connected = True
             logger.info(f"RFID reader connected to {self.host}:{self.port}")
+
+            # Set output power to 26dBm (0x1A) for 1m³ metal cabinet
+            # Higher power causes more reflections, 26dBm is optimal for this environment
+            self._set_output_power(0x1A)
+
             return True
         except Exception as e:
             logger.error(f"RFID connection failed: {e}")
@@ -286,23 +283,54 @@ class RFIDReader:
             return False
 
     def _checksum(self, data: bytes) -> int:
-        """Calculate checksum - includes 0xA0 frame header for compatibility."""
-        uSum = 0
-        for byte in data:
-            uSum = (uSum + (byte & 0xFF)) & 0xFF
-        return ((~uSum) + 1) & 0xFF
+        """Calculate checksum per ZTX-RM702 manual: sum from Len byte, exclude 0xA0 header."""
+        total = sum(b & 0xFF for b in data) & 0xFF
+        return ((~total) + 1) & 0xFF
 
     def _build_packet(self, cmd: int, data: bytes = b'') -> bytes:
-        """Build protocol packet.
+        """Build protocol packet per ZTX-RM702 manual.
 
         Frame format: [0xA0][Len][Addr][Cmd][Data...][Checksum]
-        where Len = Addr(1) + Cmd(1) + Data(N) + Check(1) = len(data) + 3
+        - Len: Count of bytes AFTER Len (Addr + Cmd + Data + Checksum) = len(data) + 3
+        - Checksum: Covers Len, Addr, Cmd, Data (NOT 0xA0 header)
         """
         length = len(data) + 3  # Addr(1) + Cmd(1) + Data(N) + Check(1)
-        # NOTE: Device expects 0xA0 to be included in checksum (non-standard)
-        packet_wo_checksum = bytes([0xA0, length & 0xFF, RFID_ADDRESS & 0xFF, cmd & 0xFF]) + data
-        cs = self._checksum(packet_wo_checksum)
-        return packet_wo_checksum + bytes([cs])
+        # Checksum covers: Len, Addr, Cmd, Data (NOT 0xA0)
+        payload = bytes([length & 0xFF, RFID_ADDRESS & 0xFF, cmd & 0xFF]) + data
+        cs = self._checksum(payload)
+        # Complete frame: Head(0xA0) + Payload + Checksum
+        return bytes([0xA0]) + payload + bytes([cs])
+
+    def _set_output_power(self, power_dbm: int = 0x1A) -> bool:
+        """
+        Set RFID reader output power.
+
+        Args:
+            power_dbm: Power level in dBm (0x00-0x1E, max 30dBm)
+                       Recommended: 0x1A (26dBm) for 1m³ metal cabinet
+
+        Returns:
+            True if command was sent successfully
+        """
+        try:
+            # Command 0x76 = Set Output Power
+            # Data: [Power]
+            packet = self._build_packet(0x76, bytes([power_dbm & 0xFF]))
+            if self.socket:
+                self.socket.sendall(packet)
+                # Wait briefly for response
+                time.sleep(0.1)
+                # Read and discard response
+                self.socket.settimeout(0.5)
+                try:
+                    self.socket.recv(256)
+                except socket.timeout:
+                    pass
+                logger.info(f"RFID output power set to {power_dbm}dBm (0x{power_dbm:02X})")
+                return True
+        except Exception as e:
+            logger.warning(f"Failed to set RFID power: {e}")
+        return False
 
     def read_rfid_tags_multiple(self) -> List[str]:
         """
@@ -456,30 +484,35 @@ class RFIDReader:
             last_data_time = start_time
             last_log_time = start_time
 
-            # Send inventory command ONCE with Target A
-            session = 0x01
+            # Send inventory command with Target A
+            # Use Session 2 (S2) for metal cabinet with many tags - allows already-read tags to go silent
+            session = 0x02  # S2 for better anti-collision in dense tag environments
             target = 0x00
-            repeat = 0x01
+            repeat = 0x01  # Single inventory round per command
             cmd_payload = bytes([session, target, repeat])
             packet = self._build_packet(0x8B, cmd_payload)
             if self.socket:
                 self.socket.sendall(packet)
 
-            target_b_sent = False
+            last_cmd_time = start_time  # Track last command time for target toggling
+            current_target = 0x00
 
             while self.reading:
                 elapsed = time.time() - start_time
                 if elapsed >= scan_duration:
                     break
 
-                # Toggle target halfway if enabled
-                if toggle_target and not target_b_sent and elapsed >= scan_duration / 2:
-                    cmd_payload_b = bytes([session, 0x01, repeat])
-                    packet_b = self._build_packet(0x8B, cmd_payload_b)
+                # CRITICAL: Toggle Target A/B every 1 second
+                # This wakes up tags that went silent in S2 mode due to metal shielding
+                if toggle_target and (elapsed - last_cmd_time) >= 1.0:
+                    current_target = 0x01 if current_target == 0x00 else 0x00
+                    cmd_payload_toggle = bytes([session, current_target, repeat])
+                    packet_toggle = self._build_packet(0x8B, cmd_payload_toggle)
                     if self.socket:
-                        self.socket.sendall(packet_b)
-                    target_b_sent = True
-                    logger.debug("Sent Target B inventory command at %.1fs", elapsed)
+                        self.socket.sendall(packet_toggle)
+                    last_cmd_time = elapsed
+                    logger.debug("Sent Target %s inventory command at %.1fs",
+                                'B' if current_target == 0x01 else 'A', elapsed)
 
                 try:
                     self.socket.settimeout(0.1)
@@ -577,6 +610,15 @@ class RFIDReader:
             Number of valid frames extracted
         """
         buf = self._recv_buffer
+
+        # Buffer overflow protection: normal RFID frames are small (<100 bytes)
+        # If buffer exceeds 1KB, we've likely lost sync - clear it to recover
+        MAX_BUFFER_SIZE = 1024
+        if len(buf) > MAX_BUFFER_SIZE:
+            logger.warning("Buffer overflow (%d bytes) or sync lost, clearing buffer", len(buf))
+            buf.clear()
+            return 0
+
         pos = 0
         frames_found = 0
         MAX_FRAME_LEN = 256
@@ -608,22 +650,18 @@ class RFIDReader:
             # Extract and validate frame
             frame = bytes(buf[pos: pos + frame_total_len])
             received_cs = frame[-1]
-            # NOTE: Device sends checksum that includes 0xA0 (non-standard)
-            calc_cs = self._checksum(frame[:-1])
+            # Checksum per manual: covers Len, Addr, Cmd, Data (NOT 0xA0 header)
+            calc_cs = self._checksum(frame[1:-1])  # Skip 0xA0 and checksum byte
 
             if received_cs != calc_cs:
                 logger.debug(
                     "Checksum mismatch at pos %d: received 0x%02X, calc 0x%02X, frame: %s",
                     pos, received_cs, calc_cs, frame[:min(20, len(frame))].hex(),
                 )
-                # Strategy 1: Look for next 0xA0 within this failed frame
-                next_a0 = self._find_next_header(buf, pos + 1, pos + frame_total_len)
-                if next_a0 > 0:
-                    pos = next_a0
-                else:
-                    # Strategy 2: Skip entire failed frame using Len field
-                    # This is the key improvement - prevents cascade alignment loss
-                    pos += frame_total_len
+                # CRITICAL: On checksum failure, only advance by 1 byte
+                # The length field may be corrupted, so skipping the whole frame
+                # could cause us to miss valid frames that follow
+                pos += 1
                 continue
 
             # Valid frame found, parse it
@@ -716,8 +754,10 @@ class RFIDReader:
             pos += 1
 
             epc_hex = epc_data.hex().upper()
+            rssi_dbm = rssi_byte - 129 if rssi_byte < 129 else rssi_byte - 129
             if self._validate_epc(epc_hex) and epc_hex not in IGNORED_TAGS:
                 self.work_mode_tags.add(epc_hex)
+                logger.info(f"Tag: EPC={epc_hex}, RSSI={rssi_dbm}dBm")
                 if self._tag_callback:
                     self._tag_callback(epc_hex)
 
@@ -752,14 +792,13 @@ class RFIDReader:
 class RaspberryPiHardware(HardwareInterface):
     """Raspberry Pi hardware implementation."""
 
-    def __init__(self, num_drawers: int = 4, num_leds: int = 8, nfc_mode: str = "auto"):
+    def __init__(self, num_drawers: int = 4, num_leds: int = 8, nfc_mode: str = "serial"):
         self.num_drawers = num_drawers
         self.num_leds = num_leds
         self._initialized = False
         self._drawer_states = {i: DrawerState.CLOSED for i in range(num_drawers)}
         self._nfc_reader = None
         self._rfid_reader = None
-        self._hid_reader = None
         self._nfc_mode = nfc_mode
         self._strip = None
         # Cache for cross-read data (when NFC is read during QR read or vice versa)
@@ -806,65 +845,33 @@ class RaspberryPiHardware(HardwareInterface):
         logger.info("Raspberry Pi hardware initialized (Solenoids + WS2812B)")
 
     def _init_nfc_reader(self):
-        """Initialize NFC reader - tries serial first, then HID keyboard."""
+        """Initialize NFC reader - serial mode only (no HID keyboard noise)."""
         if self._nfc_mode == "none":
             logger.info("NFC reader disabled")
             return
 
-        # Try serial reader first
-        if self._nfc_mode in ("auto", "serial"):
-            try:
-                self._nfc_reader = NFCQRReader()
-                if self._nfc_reader._test_connection():
-                    logger.info("Serial NFC reader initialized")
-                    return
-            except Exception as e:
-                logger.debug(f"Serial NFC reader not available: {e}")
-
-        # Try HID keyboard reader
-        if self._nfc_mode in ("auto", "hid"):
-            try:
-                from .hid_keyboard_reader import HIDKeyboardReader
-                self._hid_reader = HIDKeyboardReader()
-                if self._hid_reader.is_available():
-                    logger.info("HID keyboard NFC reader initialized")
-                    return
-            except Exception as e:
-                logger.debug(f"HID keyboard reader not available: {e}")
+        # Serial reader only - HID keyboard mode removed to eliminate EMI noise
+        try:
+            self._nfc_reader = NFCQRReader()
+            if self._nfc_reader._test_connection():
+                logger.info("Serial NFC reader initialized")
+                return
+        except Exception as e:
+            logger.debug(f"Serial NFC reader not available: {e}")
 
         logger.warning("No NFC reader available")
 
     def read_nfc(self, timeout: float = 30.0) -> Optional[str]:
-        """Read NFC card UID."""
+        """Read NFC card UID via serial only."""
         start_time = time.time()
 
         while time.time() - start_time < timeout:
-            # Try HID reader first (most common in production)
-            if self._hid_reader and self._hid_reader.is_available():
-                raw = self._hid_reader.read_card(timeout=min(1.0, timeout - (time.time() - start_time)))
-                if raw:
-                    # Clean and detect type
-                    cleaned = NFCQRReader.clean_hid_input(raw)
-                    card_type = NFCQRReader._detect_card_type(cleaned)
-
-                    if card_type == 'nfc':
-                        logger.info(f"NFC card detected (HID): {cleaned}")
-                        return cleaned
-                    else:
-                        logger.debug(f"QR code detected but read_nfc called: {cleaned[:20]}...")
-                        # Store for potential QR read
-                        self._last_read_data = cleaned
-                        self._last_read_type = 'qr'
-                continue
-
-            # Try serial reader
             if self._nfc_reader and self._nfc_reader.is_connected():
                 result = self._nfc_reader.read_card()
                 if result:
                     if result['type'] == 'nfc':
                         return result['data']
                     else:
-                        # Store for QR read
                         self._last_read_data = result['data']
                         self._last_read_type = 'qr'
 
@@ -873,7 +880,7 @@ class RaspberryPiHardware(HardwareInterface):
         return None
 
     def read_qr(self, timeout: float = 30.0) -> Optional[str]:
-        """Read QR code."""
+        """Read QR code via serial only."""
         start_time = time.time()
 
         # Check if we have cached QR data from previous read
@@ -885,32 +892,12 @@ class RaspberryPiHardware(HardwareInterface):
             return data
 
         while time.time() - start_time < timeout:
-            # Try HID reader first
-            if self._hid_reader and self._hid_reader.is_available():
-                raw = self._hid_reader.read_card(timeout=min(1.0, timeout - (time.time() - start_time)))
-                if raw:
-                    # Clean and detect type
-                    cleaned = NFCQRReader.clean_hid_input(raw)
-                    card_type = NFCQRReader._detect_card_type(cleaned)
-
-                    if card_type == 'qr':
-                        logger.info(f"QR code detected (HID): {cleaned[:30]}...")
-                        return cleaned
-                    else:
-                        logger.debug(f"NFC card detected but read_qr called: {cleaned}")
-                        # Store for potential NFC read
-                        self._last_read_data = cleaned
-                        self._last_read_type = 'nfc'
-                continue
-
-            # Try serial reader
             if self._nfc_reader and self._nfc_reader.is_connected():
                 result = self._nfc_reader.read_card()
                 if result:
                     if result['type'] == 'qr':
                         return result['data']
                     else:
-                        # Store for NFC read
                         self._last_read_data = result['data']
                         self._last_read_type = 'nfc'
 
@@ -920,26 +907,11 @@ class RaspberryPiHardware(HardwareInterface):
 
     def read_card_auto(self, timeout: float = 30.0) -> Optional[Dict[str, str]]:
         """
-        Read card and automatically detect type (NFC or QR).
-
-        Returns:
-            Dict with 'type' ('nfc' or 'qr') and 'data' keys,
-            or None if timeout
+        Read card and automatically detect type (NFC or QR) via serial only.
         """
         start_time = time.time()
 
         while time.time() - start_time < timeout:
-            # Try HID reader first
-            if self._hid_reader and self._hid_reader.is_available():
-                raw = self._hid_reader.read_card(timeout=min(1.0, timeout - (time.time() - start_time)))
-                if raw:
-                    cleaned = NFCQRReader.clean_hid_input(raw)
-                    card_type = NFCQRReader._detect_card_type(cleaned)
-                    logger.info(f"Card detected (HID): type={card_type}, data={cleaned[:30]}...")
-                    return {'type': card_type, 'data': cleaned}
-                continue
-
-            # Try serial reader
             if self._nfc_reader and self._nfc_reader.is_connected():
                 result = self._nfc_reader.read_card()
                 if result:
@@ -1139,7 +1111,7 @@ class RaspberryPiHardware(HardwareInterface):
             "mode": "raspberry_pi",
             "rpi_available": RPI_AVAILABLE,
             "solenoids": "ok" if self._initialized else "error",
-            "nfc": "ok" if self._nfc_reader and self._nfc_reader._test_connection() else ("ok" if self._hid_reader and self._hid_reader.is_available() else "error"),
+            "nfc": "ok" if self._nfc_reader and self._nfc_reader._test_connection() else "error",
             "rfid": "ok" if self._rfid_reader else "error",
             "drawers": self.num_drawers,
             "leds": self.num_leds,
