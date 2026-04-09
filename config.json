@@ -6,13 +6,13 @@
     "session_timeout": 60,
     "rfid_scan_count": 5,
     "rfid": {
-        "voting_cycles": 10,
-        "min_appearances": 2,
-        "read_interval": 0.5,
-        "idle_break_timeout": 2.0,
-        "max_cycle_wait": 5.0,
+        "voting_cycles": 17,
+        "min_appearances": 1,
+        "read_interval": 0.3,
+        "idle_break_timeout": 0.3,
+        "max_cycle_wait": 2.0,
         "log_each_cycle": true,
-        "scan_duration": null
+        "scan_duration": 5.0
     },
     "sync_interval": 60,
     "num_drawers": 4,

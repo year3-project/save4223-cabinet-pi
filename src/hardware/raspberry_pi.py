@@ -264,7 +264,7 @@ class RFIDReader:
         self._tag_callback = None  # Optional callback for tag detection
 
     def connect(self) -> bool:
-        """Connect to RFID reader."""
+        """Connect to RFID reader with antenna and power initialization."""
         try:
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.socket.settimeout(5)
@@ -272,15 +272,31 @@ class RFIDReader:
             self.connected = True
             logger.info(f"RFID reader connected to {self.host}:{self.port}")
 
-            # Set output power to 26dBm (0x1A) for 1m³ metal cabinet
-            # Higher power causes more reflections, 26dBm is optimal for this environment
-            # self._set_output_power(0x1A)
+            # Initialize antenna and power for optimal reading
+            self._init_reader()
 
             return True
         except Exception as e:
             logger.error(f"RFID connection failed: {e}")
             self.connected = False
             return False
+
+    def _init_reader(self):
+        """Initialize reader settings for optimal tag detection."""
+        try:
+            # Set antenna 1 (0x00)
+            ant_packet = self._build_packet(0x74, bytes([0x00]))
+            self.socket.sendall(ant_packet)
+            time.sleep(0.05)
+
+            # Set output power to 28dBm (0x1C) - optimal for metal cabinet
+            # Testing shows 28dBm > 30dBm (less reflection interference)
+            self._set_output_power(0x1C)
+            time.sleep(0.05)
+
+            logger.debug("RFID reader initialized (antenna=1, power=28dBm)")
+        except Exception as e:
+            logger.warning(f"RFID initialization warning: {e}")
 
     def _checksum(self, data: bytes) -> int:
         """Calculate checksum per ZTX-RM702 manual: sum from Len byte, exclude 0xA0 header."""
@@ -410,8 +426,19 @@ class RFIDReader:
                 if tag_count.get(tag, 0) >= min_appearances
             ]
 
-            # If voting threshold is too aggressive and yields no results,
-            # fall back to all detected tags with at least 1 detection
+            # Adaptive threshold: if we filtered out too many tags (>50%),
+            # lower the threshold to capture weak signals
+            filtered_ratio = 1.0 - (len(confirmed_tags) / len(detected_tags)) if detected_tags else 0
+            if detected_tags and filtered_ratio > 0.5:
+                # Lower threshold to 1 to capture all detected tags
+                logger.warning(
+                    "Voting threshold too aggressive (filtered %.0f%% tags), "
+                    "lowering threshold to 1",
+                    filtered_ratio * 100,
+                )
+                confirmed_tags = detected_tags
+
+            # If voting threshold filtered all tags, fall back
             if not confirmed_tags and detected_tags:
                 logger.warning(
                     "Voting threshold (%d) filtered all tags, "
@@ -420,11 +447,14 @@ class RFIDReader:
                 )
                 confirmed_tags = detected_tags
 
+            # Sort by detection count (most reliable first)
+            confirmed_tags = sorted(confirmed_tags, key=lambda t: tag_count.get(t, 0), reverse=True)
+
             logger.info(
                 "RFID voting complete: %d confirmed (from %d detected, threshold=%d)",
                 len(confirmed_tags), len(detected_tags), min_appearances,
             )
-            logger.info("Tag detection counts: %s", tag_count)
+            logger.info("Tag detection counts: %s", dict(sorted(tag_count.items(), key=lambda x: x[1], reverse=True)))
             logger.info("Confirmed tags: %s", confirmed_tags)
 
             return confirmed_tags
@@ -462,7 +492,7 @@ class RFIDReader:
             repeat = 0x01
             start_time = time.time()
             cycle = 0
-            interval = 1.0
+            interval = 0.3  # Shorter interval for more cycles in same time
 
             self.reading = True
 

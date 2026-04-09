@@ -29,14 +29,15 @@ DEFAULT_CONFIG = {
     'api_timeout': 5,       # seconds
     'api_retry_count': 3,
 
-    # RFID scan tuning (now uses continuous scan with time-window voting)
+    # RFID scan tuning (optimized for metal cabinet with 150+ tags)
+    # Tested: 28dBm power, 5s duration, 0.3s interval gives best accuracy (~9-11 tags)
     'rfid': {
-        'voting_cycles': 10,
-        'min_appearances': 2,
-        'read_interval': 0.5,
-        'idle_break_timeout': 2.0,
-        'max_cycle_wait': 5.0,
-        'scan_duration': None,  # Override: None = voting_cycles * read_interval
+        'voting_cycles': 17,      # ~5 seconds at 0.3s interval
+        'min_appearances': 1,     # Accept single detection
+        'read_interval': 0.3,     # 0.3s between commands (optimal)
+        'idle_break_timeout': 0.3, # Wait for tag responses
+        'max_cycle_wait': 2.0,    # Max time per cycle
+        'scan_duration': 5.0,     # 5-second scan (best accuracy)
     },
 
     # Cache settings
