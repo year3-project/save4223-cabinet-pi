@@ -274,7 +274,7 @@ class RFIDReader:
 
             # Set output power to 26dBm (0x1A) for 1m³ metal cabinet
             # Higher power causes more reflections, 26dBm is optimal for this environment
-            self._set_output_power(0x1A)
+            # self._set_output_power(0x1A)
 
             return True
         except Exception as e:
@@ -288,18 +288,17 @@ class RFIDReader:
         return ((~total) + 1) & 0xFF
 
     def _build_packet(self, cmd: int, data: bytes = b'') -> bytes:
-        """Build protocol packet per ZTX-RM702 manual.
+        """Build protocol packet (compatible with master branch).
 
         Frame format: [0xA0][Len][Addr][Cmd][Data...][Checksum]
         - Len: Count of bytes AFTER Len (Addr + Cmd + Data + Checksum) = len(data) + 3
-        - Checksum: Covers Len, Addr, Cmd, Data (NOT 0xA0 header)
+        - Checksum: Hardware requires including 0xA0 header in calculation
         """
         length = len(data) + 3  # Addr(1) + Cmd(1) + Data(N) + Check(1)
-        # Checksum covers: Len, Addr, Cmd, Data (NOT 0xA0)
-        payload = bytes([length & 0xFF, RFID_ADDRESS & 0xFF, cmd & 0xFF]) + data
-        cs = self._checksum(payload)
-        # Complete frame: Head(0xA0) + Payload + Checksum
-        return bytes([0xA0]) + payload + bytes([cs])
+        # Build packet WITH 0xA0 for checksum calculation (master branch compatible)
+        packet_wo_checksum = bytes([0xA0, length & 0xFF, RFID_ADDRESS & 0xFF, cmd & 0xFF]) + data
+        cs = self._checksum(packet_wo_checksum)  # Include 0xA0
+        return packet_wo_checksum + bytes([cs])
 
     def _set_output_power(self, power_dbm: int = 0x1A) -> bool:
         """
@@ -444,113 +443,89 @@ class RFIDReader:
         log_interval: float = 0.5,
     ) -> Dict[str, Any]:
         """
-        Send ONE inventory command and listen continuously for scan_duration seconds.
-
-        This is the recommended approach per protocol manual - let the reader's
-        anti-collision algorithm stabilize for maximum detection efficiency.
-
-        Args:
-            scan_duration: Total seconds to listen for tags (default 5.0)
-            toggle_target: If True, toggle Target A/B halfway to catch inverted tags
-            idle_break_timeout: Seconds of silence before breaking early (None = no break)
-            log_interval: Seconds between progress log messages
-
-        Returns:
-            Dict with 'tags', 'tag_count', 'bytes_received', 'frames_parsed'
+        Continuous scan with cycle-by-cycle approach (based on master branch).
+        This is more reliable than the optimized version that had timing issues.
         """
         from collections import defaultdict
-
-        if not self.connect():
-            return {'tags': [], 'tag_count': {}, 'bytes_received': 0, 'frames_parsed': 0}
-
-        self._recv_buffer.clear()
-        self.work_mode_tags.clear()
 
         tag_count: Dict[str, int] = defaultdict(int)
         bytes_received = 0
         frames_parsed = 0
+        self.work_mode_tags.clear()
+        self._recv_buffer.clear()
 
-        def on_tag_detected(epc: str):
-            tag_count[epc] += 1
-
-        self._tag_callback = on_tag_detected
-        self.reading = True
-        idle_timeout = idle_break_timeout or self._idle_break_timeout
-        startup_grace = 1.5  # Don't idle-break in the first N seconds (reader needs time to respond)
-
-        logger.info(f"Starting continuous RFID scan for {scan_duration}s")
+        if not self.connect():
+            return {'tags': [], 'tag_count': {}, 'bytes_received': 0, 'frames_parsed': 0}
 
         try:
+            session = 0x01
+            repeat = 0x01
             start_time = time.time()
-            last_data_time = start_time
-            last_log_time = start_time
+            cycle = 0
+            interval = 1.0
 
-            # Send inventory command with Target A
-            # Use Session 2 (S2) for metal cabinet with many tags - allows already-read tags to go silent
-            session = 0x02  # S2 for better anti-collision in dense tag environments
-            target = 0x00
-            repeat = 0x01  # Single inventory round per command
-            cmd_payload = bytes([session, target, repeat])
-            packet = self._build_packet(0x8B, cmd_payload)
-            if self.socket:
-                self.socket.sendall(packet)
+            self.reading = True
 
-            last_cmd_time = start_time  # Track last command time for target toggling
-            current_target = 0x00
+            # Set up idle timeout
+            prev_idle = self._idle_break_timeout
+            if idle_break_timeout is not None:
+                self._idle_break_timeout = idle_break_timeout
+
+            logger.info(f"Starting continuous scan for {scan_duration}s...")
 
             while self.reading:
-                elapsed = time.time() - start_time
-                if elapsed >= scan_duration:
+                now = time.time()
+                if now - start_time >= scan_duration:
                     break
 
-                # CRITICAL: Toggle Target A/B every 1 second
-                # This wakes up tags that went silent in S2 mode due to metal shielding
-                if toggle_target and (elapsed - last_cmd_time) >= 1.0:
-                    current_target = 0x01 if current_target == 0x00 else 0x00
-                    cmd_payload_toggle = bytes([session, current_target, repeat])
-                    packet_toggle = self._build_packet(0x8B, cmd_payload_toggle)
-                    if self.socket:
-                        self.socket.sendall(packet_toggle)
-                    last_cmd_time = elapsed
-                    logger.debug("Sent Target %s inventory command at %.1fs",
-                                'B' if current_target == 0x01 else 'A', elapsed)
+                # Toggle target every cycle to capture inverted tags
+                target = 0x00 if cycle % 2 == 0 else 0x01
+                cmd_payload = bytes([session, target, repeat])
 
-                try:
-                    self.socket.settimeout(0.1)
-                    data = self.socket.recv(8192)  # Increased buffer size
-                    if data:
-                        last_data_time = time.time()
-                        bytes_received += len(data)
-                        logger.debug("DEBUG: Received %d bytes: %s", len(data), data.hex())
-                        self._recv_buffer.extend(data)
-                        frames_parsed += self._extract_frames_from_buffer()
+                # Clear tags for this cycle to get fresh detection
+                self.work_mode_tags.clear()
 
-                        if time.time() - last_log_time >= log_interval:
-                            logger.debug(
-                                "RFID scan progress: %.1fs, %d unique tags, %d bytes",
-                                elapsed, len(tag_count), bytes_received,
-                            )
-                            last_log_time = time.time()
-                    else:
-                        if idle_timeout and elapsed > startup_grace and (time.time() - last_data_time) > idle_timeout:
-                            logger.debug("RFID idle break after %.1fs", elapsed)
+                # Send inventory command
+                packet = self._build_packet(0x8B, cmd_payload)
+                self.socket.sendall(packet)
+
+                # Receive for this cycle
+                cycle_start = time.time()
+                last_data_time = cycle_start
+
+                while (time.time() - cycle_start) < self._max_cycle_wait:
+                    try:
+                        self.socket.settimeout(0.1)
+                        data = self.socket.recv(4096)
+                        if data:
+                            last_data_time = time.time()
+                            bytes_received += len(data)
+                            self._recv_buffer.extend(data)
+                            frames_parsed += self._extract_frames_from_buffer()
+                        else:
+                            if (time.time() - last_data_time) > self._idle_break_timeout:
+                                break
+                    except socket.timeout:
+                        if (time.time() - last_data_time) > self._idle_break_timeout:
                             break
-                except socket.timeout:
-                    if idle_timeout and elapsed > startup_grace and (time.time() - last_data_time) > idle_timeout:
-                        logger.debug("RFID idle break (socket timeout) after %.1fs", elapsed)
+                        continue
+                    except Exception as e:
+                        logger.error(f"RFID receive error: {e}")
                         break
-                    continue
-                except Exception as e:
-                    logger.error(f"RFID receive error: {e}")
-                    break
 
-            total_time = time.time() - start_time
-            detected_tags = list(self.work_mode_tags)
+                # Count tags found in this cycle
+                cycle_tags = set(self.work_mode_tags)
+                for tag in cycle_tags:
+                    tag_count[tag] += 1
 
-            logger.info(
-                "RFID continuous scan complete: %.1fs, %d tags, %d bytes, %d frames",
-                total_time, len(detected_tags), bytes_received, frames_parsed,
-            )
+                cycle += 1
+                time.sleep(interval)
+
+            # Restore idle timeout
+            self._idle_break_timeout = prev_idle
+
+            detected_tags = list(tag_count.keys())
+            logger.info(f"Scan complete: {len(detected_tags)} tags found, {bytes_received} bytes received")
 
             return {
                 'tags': detected_tags,
@@ -560,13 +535,13 @@ class RFIDReader:
             }
 
         except Exception as e:
-            logger.error(f"RFID continuous scan error: {e}")
+            logger.error(f"Scan error: {e}")
             return {'tags': [], 'tag_count': {}, 'bytes_received': bytes_received, 'frames_parsed': frames_parsed}
         finally:
-            self._tag_callback = None
-            self.stop_reading()
+            self.reading = False
             self.disconnect()
-
+            
+            
     def _receive_and_process(self):
         """Receive and process RFID data."""
         start_time = time.time()
@@ -652,8 +627,10 @@ class RFIDReader:
             # Extract and validate frame
             frame = bytes(buf[pos: pos + frame_total_len])
             received_cs = frame[-1]
-            # Checksum per manual: covers Len, Addr, Cmd, Data (NOT 0xA0 header)
-            calc_cs = self._checksum(frame[1:-1])  # Skip 0xA0 and checksum byte
+            # Checksum: hardware appears to include 0xA0 header in calculation
+            # Master branch uses frame[:-1], new implementation used frame[1:-1]
+            # Using master approach for compatibility
+            calc_cs = self._checksum(frame[:-1])  # Include 0xA0, exclude checksum byte
 
             if received_cs != calc_cs:
                 logger.debug(
@@ -814,25 +791,25 @@ class RaspberryPiHardware(HardwareInterface):
             self._initialized = True
             return
 
-        # Initialize GPIO
-        GPIO.setmode(GPIO.BCM)
+        # # Initialize GPIO
+        # GPIO.setmode(GPIO.BCM)
 
-        # Setup solenoid pins
-        for pin in SOLENOID_PINS:
-            GPIO.setup(pin, GPIO.OUT)
-            GPIO.output(pin, GPIO.LOW) # Ensure locked on start
+        # # Setup solenoid pins
+        # for pin in SOLENOID_PINS:
+        #     GPIO.setup(pin, GPIO.OUT)
+        #     GPIO.output(pin, GPIO.LOW) # Ensure locked on start
 
-        # Setup drawer switch pins (internal pull-down: HIGH = drawer open)
-        for pin in DRAWER_SWITCH_PINS:
-            GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+        # # Setup drawer switch pins (internal pull-down: HIGH = drawer open)
+        # for pin in DRAWER_SWITCH_PINS:
+        #     GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
 
-        # Initialize WS2812B Strip
-        try:
-            self._strip = PixelStrip(LED_COUNT, LED_PIN, LED_FREQ_HZ, LED_DMA, LED_INVERT, LED_BRIGHTNESS, LED_CHANNEL)
-            self._strip.begin()
-            logger.info("WS2812B Strip initialized")
-        except Exception as e:
-            logger.error(f"Failed to initialize WS2812B strip: {e}")
+        # # Initialize WS2812B Strip
+        # try:
+        #     self._strip = PixelStrip(LED_COUNT, LED_PIN, LED_FREQ_HZ, LED_DMA, LED_INVERT, LED_BRIGHTNESS, LED_CHANNEL)
+        #     self._strip.begin()
+        #     logger.info("WS2812B Strip initialized")
+        # except Exception as e:
+        #     logger.error(f"Failed to initialize WS2812B strip: {e}")
 
         # Initialize NFC/QR reader
         self._init_nfc_reader()
