@@ -87,23 +87,16 @@ def test_rfid_reader(hw):
     log_each_cycle = rfid_cfg.get('log_each_cycle', False)
 
     print("\n" + "=" * 50)
-    print("TESTING RFID READER (VOTING MODE)")
+    print("TESTING RFID READER (INVENTORY MODE)")
     print(f"  Host: {RFID_HOST}:{RFID_PORT}")
-    print(
-        f"  Config: {total_cycles} cycles, need {min_appearances}+ appearances "
-        f"(interval={read_interval:.2f}s, idle={idle_break_timeout:.2f}s, max_wait={max_cycle_wait:.2f}s)"
-    )
+    print("  Config: 3 passes x 5.0s (multi-pass for stability)")
     print("=" * 50)
     print("Place RFID tags near the antennas...")
 
-    # Use voting method for better accuracy (configurable cycles/thresholds)
-    tags = hw.read_rfid_tags_voting(
-        total_cycles=total_cycles,
-        min_appearances=min_appearances,
-        read_interval=read_interval,
-        idle_break_timeout=idle_break_timeout,
-        max_cycle_wait=max_cycle_wait,
-        log_each_cycle=log_each_cycle,
+    # Use inventory mode for stable counting (3 passes x 5s)
+    tags = hw.read_rfid_tags_inventory(
+        scan_passes=3,
+        pass_duration=5.0,
     )
 
     if tags:

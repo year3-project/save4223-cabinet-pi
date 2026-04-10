@@ -358,6 +358,72 @@ class RFIDReader:
         result = self.read_rfid_tags_continuous(scan_duration=scan_duration)
         return result['tags']
 
+    def read_rfid_tags_inventory(
+        self,
+        scan_passes: int = 3,
+        pass_duration: float = 5.0,
+        cooldown: float = 0.3,
+    ) -> List[str]:
+        """
+        Inventory-optimized RFID scan with multiple passes and union.
+
+        For inventory counting, stability is more important than speed.
+        This method performs multiple shorter scans and returns the union
+        of all detected tags, reducing miss rates.
+
+        Args:
+            scan_passes: Number of scan passes (default 3)
+            pass_duration: Duration of each pass in seconds (default 5.0)
+            cooldown: Delay between passes in seconds (default 0.3)
+
+        Returns:
+            List of unique tags detected across all passes
+        """
+        from collections import Counter
+
+        all_tags = set()
+        tag_counter = Counter()
+        pass_details = []
+
+        logger.info(
+            f"Starting inventory scan: {scan_passes} passes x {pass_duration}s"
+        )
+
+        for pass_num in range(scan_passes):
+            result = self.read_rfid_tags_continuous(
+                scan_duration=pass_duration,
+                toggle_target=True,
+                idle_break_timeout=0.3,
+            )
+
+            pass_tags = set(result['tags'])
+            all_tags.update(pass_tags)
+            tag_counter.update(result['tag_count'])
+            pass_details.append(len(pass_tags))
+
+            logger.info(
+                f"Pass {pass_num + 1}/{scan_passes}: {len(pass_tags)} tags "
+                f"(cumulative: {len(all_tags)})"
+            )
+
+            if pass_num < scan_passes - 1:
+                time.sleep(cooldown)
+
+        # Sort by detection frequency (most reliable first)
+        sorted_tags = sorted(
+            all_tags,
+            key=lambda t: tag_counter[t],
+            reverse=True
+        )
+
+        logger.info(
+            f"Inventory complete: {len(sorted_tags)} unique tags from "
+            f"{scan_passes} passes {pass_details}"
+        )
+        logger.info(f"Tag detection counts: {dict(tag_counter)}")
+
+        return sorted_tags
+
     def read_rfid_tags_voting(
         self,
         total_cycles: int = 10,
@@ -973,6 +1039,32 @@ class RaspberryPiHardware(HardwareInterface):
             max_cycle_wait=max_cycle_wait,
             log_each_cycle=log_each_cycle,
             scan_duration=scan_duration,
+        )
+
+    def read_rfid_tags_inventory(
+        self,
+        scan_passes: int = 3,
+        pass_duration: float = 5.0,
+    ) -> List[str]:
+        """
+        Inventory-optimized RFID scan for stable counting.
+
+        Performs multiple scan passes and returns union of all detected tags.
+        This is more reliable than single scan for inventory purposes.
+
+        Args:
+            scan_passes: Number of scan passes (default 3)
+            pass_duration: Duration of each pass in seconds (default 5.0)
+
+        Returns:
+            List of unique tags detected across all passes
+        """
+        if not self._rfid_reader:
+            return []
+
+        return self._rfid_reader.read_rfid_tags_inventory(
+            scan_passes=scan_passes,
+            pass_duration=pass_duration,
         )
 
     def unlock_drawer(self, drawer_id: int) -> bool:
