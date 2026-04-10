@@ -14,6 +14,11 @@
         "log_each_cycle": true,
         "scan_duration": 5.0
     },
+    "rfid_inventory": {
+        "scan_passes": 3,
+        "pass_duration": 5.0,
+        "description": "Multi-pass inventory scan - accuracy prioritized"
+    },
     "sync_interval": 60,
     "num_drawers": 4,
     "hardware": {

@@ -734,35 +734,29 @@ class SmartCabinet:
 
     def _scan_rfid(self) -> list:
         """
-        Perform RFID scan with voting mechanism for accurate results.
+        Perform RFID inventory scan with multi-pass accumulation for maximum accuracy.
 
-        Parameters are configurable via CONFIG['rfid'] to balance
-        missed reads vs. false positives.
+        Uses multiple scan passes and returns the union of all detected tags.
+        This ensures minimal missed reads for inventory counting - accuracy is
+        prioritized over speed.
+
+        Parameters are configurable via CONFIG['rfid_inventory'].
         """
-        rfid_cfg = CONFIG.get('rfid', {})
-        total_cycles = rfid_cfg.get('voting_cycles', 10)
-        min_appearances = rfid_cfg.get('min_appearances', 3)
-        read_interval = rfid_cfg.get('read_interval', 1.0)
-        idle_break_timeout = rfid_cfg.get('idle_break_timeout', 0.2)
-        max_cycle_wait = rfid_cfg.get('max_cycle_wait', 2.0)
-        log_each_cycle = rfid_cfg.get('log_each_cycle', False)
-        scan_duration = rfid_cfg.get('scan_duration', None)
+        rfid_cfg = CONFIG.get('rfid_inventory', {})
+        scan_passes = rfid_cfg.get('scan_passes', 3)
+        pass_duration = rfid_cfg.get('pass_duration', 5.0)
 
         logger.info(
-            "Starting RFID voting scan (%s cycles, need %s+ appearances)",
-            total_cycles,
-            min_appearances,
+            "Starting RFID inventory scan (%s passes x %ss each)",
+            scan_passes,
+            pass_duration,
         )
-        result = self.hardware.read_rfid_tags_voting(
-            total_cycles=total_cycles,
-            min_appearances=min_appearances,
-            read_interval=read_interval,
-            idle_break_timeout=idle_break_timeout,
-            max_cycle_wait=max_cycle_wait,
-            log_each_cycle=log_each_cycle,
-            scan_duration=scan_duration,
+        result = self.hardware.read_rfid_tags_inventory(
+            scan_passes=scan_passes,
+            pass_duration=pass_duration,
         )
-        logger.info(f"RFID voting scan complete: {len(result)} confirmed tags")
+        logger.info(f"RFID inventory scan complete: {len(result)} unique tags detected")
+        return result
         return result
 
     # =================================================================================
