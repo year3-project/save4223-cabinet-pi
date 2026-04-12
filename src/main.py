@@ -654,19 +654,20 @@ class SmartCabinet:
 
         self._send_to_display({
             'type': 'PAIRING_MODE',
-            'message': 'Pairing mode: Tap NFC card to complete pairing (10s timeout)'
+            'message': 'Tap your NFC card on the reader to complete pairing'
         })
         self.hardware.set_all_leds('yellow')
 
         # Wait for NFC card tap (10 second timeout)
+        # Use read_card_auto instead of read_nfc so we don't discard QR
+        # data from the shared HID reader buffer.
         start_time = time.time()
         card_uid = None
 
         while time.time() - start_time < 10:
-            card = self.hardware.read_nfc(timeout=0.5)
-            # Accept any non-empty card reading (HID reader handles validation)
-            if card and len(card.strip()) >= 1:
-                card_uid = card.strip()
+            result = self.hardware.read_card_auto(timeout=0.5)
+            if result and result['type'] == 'nfc':
+                card_uid = result['data'].strip()
                 break
             time.sleep(0.1)
 
@@ -678,6 +679,7 @@ class SmartCabinet:
                 'code': 'TIMEOUT'
             })
             self.hardware.beep_error()
+            self.hardware.set_all_leds('off')
             time.sleep(2)
             self._send_to_display({
                 'type': 'STATE_CHANGE',
@@ -721,6 +723,7 @@ class SmartCabinet:
             time.sleep(3)
 
         # Return to idle
+        self.hardware.set_all_leds('off')
         self._send_to_display({
             'type': 'STATE_CHANGE',
             'state': 'IDLE',
@@ -811,20 +814,20 @@ class SmartCabinet:
                 raw = result['data']
                 card_type = result['type']
 
-                # Try to extract pairing token
-                token = self.pairing_handler.extract_token_from_qr(raw)
-                if token:
-                    logger.info(f"Pairing token detected via HID: {token}")
-                    self._enter_pairing_mode(token)
-                    return
-
-                if card_type == 'nfc':
+                if card_type == 'qr':
+                    # QR code — check for pairing token
+                    token = self.pairing_handler.extract_token_from_qr(raw)
+                    if token:
+                        logger.info(f"Pairing token detected via HID: {token}")
+                        self._enter_pairing_mode(token)
+                        return
+                    else:
+                        logger.debug(f"QR code detected but not a pairing token: {raw[:30]}...")
+                elif card_type == 'nfc':
+                    # NFC card — go straight to authentication
                     logger.info(f"Card detected: {raw[:10]}...")
                     self.current_card_uid = raw
                     self.state_machine.transition(SystemState.AUTHENTICATING)
-                else:
-                    # QR code but not a pairing token - log and ignore
-                    logger.debug(f"QR code detected but not a pairing token: {raw[:30]}...")
             return
 
         # Non-HID mode: Check for QR code first (pairing mode)

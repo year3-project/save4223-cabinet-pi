@@ -79,39 +79,44 @@ class PairingHandler:
         output is decoded by stripping M-noise and searching for the
         CARDPAIRING + TOKEN markers.
 
-        Card UIDs are short raw strings (~9 chars) and will never match.
+        Card UIDs are short raw strings (~9 chars) and will never match
+        the JSON or long-payload checks, but may match the direct 8-char
+        pattern — callers must only invoke this for QR-type inputs.
         """
         if not qr_content:
             return None
 
-        qr_content = self._clean_hid_input(qr_content)
-
-        # 1. Direct 8-char token (reader outputs clean token only)
-        if self.QR_TOKEN_PATTERN.match(qr_content):
-            logger.debug(f"Token extracted directly: {qr_content}")
-            return qr_content
-
-        # 2. Clean JSON (reader outputs full ASCII)
-        if qr_content.startswith('{'):
+        # 1. Try clean JSON on the RAW input first (before any uppercasing).
+        #    The HID reader with proper shift-key support outputs valid JSON.
+        raw = qr_content.strip()
+        if raw.startswith('{'):
             try:
                 import json
-                data = json.loads(qr_content)
+                data = json.loads(raw)
                 if data.get('type') == 'CARD_PAIRING':
                     token = data.get('token', '').upper()
                     if self.QR_TOKEN_PATTERN.match(token):
-                        logger.debug(f"Token extracted from JSON: {token}")
+                        logger.debug(f"Token extracted from raw JSON: {token}")
                         return token
             except (json.JSONDecodeError, AttributeError):
                 pass
 
-        # 3. HID-encoded JSON or URL: special chars stripped, M-noise interspersed.
+        # 2. Clean HID input (uppercases + strips noise) for fallback checks.
+        cleaned = self._clean_hid_input(qr_content)
+
+        # 3. Direct 8-char token (reader outputs clean token only)
+        if self.QR_TOKEN_PATTERN.match(cleaned):
+            logger.debug(f"Token extracted directly: {cleaned}")
+            return cleaned
+
+        # 4. HID-encoded JSON or URL: special chars stripped, M-noise interspersed.
         #    Card UIDs are short (~9 chars); QR payloads are typically much longer.
-        if len(qr_content) >= 20:
-            token = self._extract_hid_json_token(qr_content)
+        if len(cleaned) >= 20:
+            token = self._extract_hid_json_token(cleaned)
             if token:
                 return token
 
-            token = self._extract_hid_marker_token(qr_content)
+            token = self._extract_hid_marker_token(cleaned)
             if token:
                 return token
 

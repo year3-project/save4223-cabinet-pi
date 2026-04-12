@@ -39,6 +39,7 @@ class DisplayState(Enum):
     RFID_SCANNING = "RFID_SCANNING"
     SESSION_SUMMARY = "SESSION_SUMMARY"
     ERROR = "ERROR"
+    PAIRING = "PAIRING"
 
 
 class CabinetDisplayGUI:
@@ -408,6 +409,26 @@ class CabinetDisplayGUI:
                 self._update_transaction_lists(borrowed, returned)
                 self.summary_container.style('display: block;')
 
+        elif state == DisplayState.PAIRING:
+            self.status_card.style('''
+                max-width: 450px; background: white;
+                border: 2px solid var(--color-warning); border-radius: var(--radius);
+                padding: 30px 40px; text-align: center;
+                box-shadow: 0 0 0 4px rgba(253,224,71,0.2);
+            ''')
+            pairing_step = (data or {}).get('step', 1)
+            if pairing_step == 1:
+                self.status_icon.set_text('1️⃣')
+                self.status_label.set_text(
+                    message or "Step 1 of 2: Scan your pairing QR code\nfrom the web app"
+                )
+            else:
+                self.status_icon.set_text('2️⃣')
+                self.status_label.set_text(
+                    message or "Step 2 of 2: Tap your NFC card\non the reader now"
+                )
+                self.scanning_container.classes(remove='hidden')
+
         elif state == DisplayState.ERROR:
             self.status_card.style('''
                 max-width: 450px; background: white;
@@ -508,10 +529,15 @@ class CabinetDisplayGUI:
 
         # Pairing mode handlers
         elif msg_type == "PAIRING_MODE":
-            self.set_state(DisplayState.IDLE, message.get("message", "Pairing mode active. Tap unpaired card to begin."))
+            # QR scanned, waiting for NFC tap
+            self.set_state(DisplayState.PAIRING,
+                           message.get("message", "Tap your NFC card on the reader"),
+                           data={"step": 2})
 
         elif msg_type == "PAIRING_PROMPT":
-            self.set_state(DisplayState.RFID_SCANNING, message.get("message", "Show pairing QR code or enter code"))
+            self.set_state(DisplayState.PAIRING,
+                           message.get("message", "Show pairing QR code or enter code"),
+                           data={"step": 1})
 
         elif msg_type == "PAIRING_SUCCESS":
             self.set_state(DisplayState.LOGIN_SUCCESS, message.get("message", "Pairing successful!"))
