@@ -23,6 +23,7 @@ except ImportError as e:
     logging.warning(f"RPi libraries not available ({e}) - running in simulation mode")
 
 from .base import HardwareInterface, DrawerState, LEDColor
+from .hidraw_reader import HIDRawReader
 
 logger = logging.getLogger(__name__)
 
@@ -867,12 +868,13 @@ class RFIDReader:
 class RaspberryPiHardware(HardwareInterface):
     """Raspberry Pi hardware implementation."""
 
-    def __init__(self, num_drawers: int = 4, num_leds: int = 8, nfc_mode: str = "serial"):
+    def __init__(self, num_drawers: int = 4, num_leds: int = 8, nfc_mode: str = "auto"):
         self.num_drawers = num_drawers
         self.num_leds = num_leds
         self._initialized = False
         self._drawer_states = {i: DrawerState.CLOSED for i in range(num_drawers)}
         self._nfc_reader = None
+        self._hid_reader = None
         self._rfid_reader = None
         self._nfc_mode = nfc_mode
         self._strip = None
@@ -887,25 +889,25 @@ class RaspberryPiHardware(HardwareInterface):
             self._initialized = True
             return
 
-        # # Initialize GPIO
-        # GPIO.setmode(GPIO.BCM)
+        # Initialize GPIO
+        GPIO.setmode(GPIO.BCM)
 
-        # # Setup solenoid pins
-        # for pin in SOLENOID_PINS:
-        #     GPIO.setup(pin, GPIO.OUT)
-        #     GPIO.output(pin, GPIO.LOW) # Ensure locked on start
+        # Setup solenoid pins
+        for pin in SOLENOID_PINS:
+            GPIO.setup(pin, GPIO.OUT)
+            GPIO.output(pin, GPIO.LOW) # Ensure locked on start
 
-        # # Setup drawer switch pins (internal pull-down: HIGH = drawer open)
-        # for pin in DRAWER_SWITCH_PINS:
-        #     GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+        # Setup drawer switch pins (internal pull-down: HIGH = drawer open)
+        for pin in DRAWER_SWITCH_PINS:
+            GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
 
-        # # Initialize WS2812B Strip
-        # try:
-        #     self._strip = PixelStrip(LED_COUNT, LED_PIN, LED_FREQ_HZ, LED_DMA, LED_INVERT, LED_BRIGHTNESS, LED_CHANNEL)
-        #     self._strip.begin()
-        #     logger.info("WS2812B Strip initialized")
-        # except Exception as e:
-        #     logger.error(f"Failed to initialize WS2812B strip: {e}")
+        # Initialize WS2812B Strip
+        try:
+            self._strip = PixelStrip(LED_COUNT, LED_PIN, LED_FREQ_HZ, LED_DMA, LED_INVERT, LED_BRIGHTNESS, LED_CHANNEL)
+            self._strip.begin()
+            logger.info("WS2812B Strip initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize WS2812B strip: {e}")
 
         # Initialize NFC/QR reader
         self._init_nfc_reader()
@@ -920,27 +922,69 @@ class RaspberryPiHardware(HardwareInterface):
         logger.info("Raspberry Pi hardware initialized (Solenoids + WS2812B)")
 
     def _init_nfc_reader(self):
-        """Initialize NFC reader - serial mode only (no HID keyboard noise)."""
+        """
+        Initialize NFC reader with multiple fallback modes.
+
+        Priority:
+        1. Serial mode (optimal for EMI stability, requires serial firmware)
+        2. HIDRAW mode (direct hidraw access, avoids Linux input event noise)
+        3. HID keyboard mode (fallback using evdev)
+        """
         if self._nfc_mode == "none":
             logger.info("NFC reader disabled")
             return
 
-        # Serial reader only - HID keyboard mode removed to eliminate EMI noise
-        try:
-            self._nfc_reader = NFCQRReader()
-            if self._nfc_reader._test_connection():
-                logger.info("Serial NFC reader initialized")
-                return
-        except Exception as e:
-            logger.debug(f"Serial NFC reader not available: {e}")
+        self._nfc_reader = None
+        self._hid_reader = None
+
+        # Try 1: Serial mode (optimal, requires serial firmware)
+        if self._nfc_mode in ("auto", "serial"):
+            try:
+                self._nfc_reader = NFCQRReader()
+                if self._nfc_reader.is_connected():
+                    logger.info("Serial NFC reader initialized")
+                    return
+                else:
+                    self._nfc_reader.close()
+                    self._nfc_reader = None
+            except Exception as e:
+                logger.debug(f"Serial NFC reader not available: {e}")
+
+        # Try 2: HIDRAW mode (direct access, less noise than evdev)
+        if self._nfc_mode in ("auto", "hidraw"):
+            try:
+                self._hid_reader = HIDRawReader()
+                if self._hid_reader.is_available():
+                    logger.info("HIDRAW NFC reader initialized (direct mode)")
+                    return
+                else:
+                    self._hid_reader.close()
+                    self._hid_reader = None
+            except Exception as e:
+                logger.debug(f"HIDRAW NFC reader not available: {e}")
+
+        # Try 3: HID keyboard mode (fallback using evdev)
+        if self._nfc_mode in ("auto", "hid"):
+            try:
+                from .hid_keyboard_reader import HIDKeyboardReader, EVDEV_AVAILABLE
+                if EVDEV_AVAILABLE:
+                    self._hid_reader = HIDKeyboardReader()
+                    if self._hid_reader.is_available():
+                        logger.info("HID Keyboard NFC reader initialized (evdev mode)")
+                        return
+                    else:
+                        self._hid_reader = None
+            except Exception as e:
+                logger.debug(f"HID Keyboard reader not available: {e}")
 
         logger.warning("No NFC reader available")
 
     def read_nfc(self, timeout: float = 30.0) -> Optional[str]:
-        """Read NFC card UID via serial only."""
+        """Read NFC card UID (supports serial and HID modes)."""
         start_time = time.time()
 
         while time.time() - start_time < timeout:
+            # Try serial reader first
             if self._nfc_reader and self._nfc_reader.is_connected():
                 result = self._nfc_reader.read_card()
                 if result:
@@ -950,12 +994,22 @@ class RaspberryPiHardware(HardwareInterface):
                         self._last_read_data = result['data']
                         self._last_read_type = 'qr'
 
-            time.sleep(0.1)
+            # Try HID reader (hidraw or evdev mode)
+            if self._hid_reader and self._hid_reader.is_available():
+                result = self._hid_reader.read_card(timeout=0.1)
+                if result:
+                    if result['type'] == 'nfc':
+                        return result['data']
+                    else:
+                        self._last_read_data = result['data']
+                        self._last_read_type = 'qr'
+
+            time.sleep(0.05)
 
         return None
 
     def read_qr(self, timeout: float = 30.0) -> Optional[str]:
-        """Read QR code via serial only."""
+        """Read QR code (supports serial and HID modes)."""
         start_time = time.time()
 
         # Check if we have cached QR data from previous read
@@ -967,6 +1021,7 @@ class RaspberryPiHardware(HardwareInterface):
             return data
 
         while time.time() - start_time < timeout:
+            # Try serial reader first
             if self._nfc_reader and self._nfc_reader.is_connected():
                 result = self._nfc_reader.read_card()
                 if result:
@@ -976,23 +1031,42 @@ class RaspberryPiHardware(HardwareInterface):
                         self._last_read_data = result['data']
                         self._last_read_type = 'nfc'
 
-            time.sleep(0.1)
+            # Try HID reader (hidraw or evdev mode)
+            if self._hid_reader and self._hid_reader.is_available():
+                result = self._hid_reader.read_card(timeout=0.1)
+                if result:
+                    if result['type'] == 'qr':
+                        return result['data']
+                    else:
+                        self._last_read_data = result['data']
+                        self._last_read_type = 'nfc'
+
+            time.sleep(0.05)
 
         return None
 
     def read_card_auto(self, timeout: float = 30.0) -> Optional[Dict[str, str]]:
         """
-        Read card and automatically detect type (NFC or QR) via serial only.
+        Read card and automatically detect type (NFC or QR).
+
+        Supports both serial and HID modes.
         """
         start_time = time.time()
 
         while time.time() - start_time < timeout:
+            # Try serial reader first (if available)
             if self._nfc_reader and self._nfc_reader.is_connected():
                 result = self._nfc_reader.read_card()
                 if result:
                     return result
 
-            time.sleep(0.1)
+            # Try HID reader (hidraw or evdev mode)
+            if self._hid_reader and self._hid_reader.is_available():
+                result = self._hid_reader.read_card(timeout=0.1)
+                if result:
+                    return result
+
+            time.sleep(0.05)
 
         return None
 
@@ -1189,6 +1263,9 @@ class RaspberryPiHardware(HardwareInterface):
         if self._nfc_reader:
             self._nfc_reader.close()
 
+        if self._hid_reader:
+            self._hid_reader.close()
+
         if self._rfid_reader:
             self._rfid_reader.disconnect()
 
@@ -1207,12 +1284,24 @@ class RaspberryPiHardware(HardwareInterface):
 
     def health_check(self) -> Dict[str, Any]:
         """Check hardware health."""
+        # Check NFC status (serial or HID mode)
+        nfc_status = "error"
+        nfc_mode = "none"
+        if self._nfc_reader and self._nfc_reader.is_connected():
+            nfc_status = "ok"
+            nfc_mode = "serial"
+        elif self._hid_reader and self._hid_reader.is_available():
+            nfc_status = "ok"
+            # Detect mode based on class name
+            nfc_mode = getattr(self._hid_reader, '__class__', None).__name__ if self._hid_reader else "hid"
+
         return {
             "status": "healthy" if self._initialized else "not_initialized",
             "mode": "raspberry_pi",
             "rpi_available": RPI_AVAILABLE,
             "solenoids": "ok" if self._initialized else "error",
-            "nfc": "ok" if self._nfc_reader and self._nfc_reader._test_connection() else "error",
+            "nfc": nfc_status,
+            "nfc_mode": nfc_mode,
             "rfid": "ok" if self._rfid_reader else "error",
             "drawers": self.num_drawers,
             "leds": self.num_leds,

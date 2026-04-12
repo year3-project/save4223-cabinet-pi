@@ -347,9 +347,9 @@ def main():
     try:
         hw = RaspberryPiHardware(num_drawers=4)
         hw.initialize()
-        # health = hw.health_check()
-        # print(f"  NFC:  {health.get('nfc', 'unknown')}")
-        # print(f"  RFID: {health.get('rfid', 'unknown')}")
+        health = hw.health_check()
+        print(f"  NFC:  {health.get('nfc', 'unknown')}")
+        print(f"  RFID: {health.get('rfid', 'unknown')}")
     except Exception as e:
         print(f"Hardware init failed: {e}")
         return 1
