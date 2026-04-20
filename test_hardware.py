@@ -86,17 +86,22 @@ def test_rfid_reader(hw):
     max_cycle_wait = rfid_cfg.get('max_cycle_wait', 2.0)
     log_each_cycle = rfid_cfg.get('log_each_cycle', False)
 
+    rfid_inv_cfg = CONFIG.get('rfid_inventory', {})
+    scan_passes = rfid_inv_cfg.get('scan_passes', 3)
+    pass_duration = rfid_inv_cfg.get('pass_duration', 5.0)
+    antennas = rfid_inv_cfg.get('antennas')
+
     print("\n" + "=" * 50)
     print("TESTING RFID READER (INVENTORY MODE)")
     print(f"  Host: {RFID_HOST}:{RFID_PORT}")
-    print("  Config: 3 passes x 5.0s (multi-pass for stability)")
+    print(f"  Config: {scan_passes} passes x {pass_duration}s, antennas={antennas}")
     print("=" * 50)
     print("Place RFID tags near the antennas...")
 
-    # Use inventory mode for stable counting (3 passes x 5s)
     tags = hw.read_rfid_tags_inventory(
-        scan_passes=3,
-        pass_duration=5.0,
+        scan_passes=scan_passes,
+        pass_duration=pass_duration,
+        antennas=antennas,
     )
 
     if tags:

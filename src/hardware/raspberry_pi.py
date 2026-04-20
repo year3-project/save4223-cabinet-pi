@@ -47,7 +47,7 @@ RFID_PORT = 4001
 RFID_READ_CYCLES = 8
 RFID_READ_INTERVAL = 1.0
 RFID_ADDRESS = 0xFF
-IGNORED_TAGS = {"00B07A15306008EFF68E8F54"}
+IGNORED_TAGS = {"00B07A15306008EFF68E8F54", "0000"}
 
 # NFC/QR configuration
 NFC_BAUD_RATE = 115200
@@ -285,19 +285,34 @@ class RFIDReader:
     def _init_reader(self):
         """Initialize reader settings for optimal tag detection."""
         try:
-            # Set antenna 1 (0x00)
-            ant_packet = self._build_packet(0x74, bytes([0x00]))
-            self.socket.sendall(ant_packet)
+            # Set output power to 33dBm (0x21) per protocol manual
+            self._set_output_power(0x21)
             time.sleep(0.05)
 
-            # Set output power to 28dBm (0x1C) - optimal for metal cabinet
-            # Testing shows 28dBm > 30dBm (less reflection interference)
-            self._set_output_power(0x1C)
-            time.sleep(0.05)
-
-            logger.debug("RFID reader initialized (antenna=1, power=28dBm)")
+            logger.debug("RFID reader initialized (power=33dBm)")
         except Exception as e:
             logger.warning(f"RFID initialization warning: {e}")
+
+    def _set_antenna(self, ant_id: int):
+        """Select active antenna on the RFID reader.
+
+        Args:
+            ant_id: Antenna number (0x00=antenna 1, 0x01=antenna 2, 0xFF=all)
+        """
+        try:
+            packet = self._build_packet(0x74, bytes([ant_id & 0xFF]))
+            if self.socket:
+                self.socket.sendall(packet)
+                time.sleep(0.05)
+                # Read and discard response
+                self.socket.settimeout(0.3)
+                try:
+                    self.socket.recv(256)
+                except socket.timeout:
+                    pass
+            logger.debug(f"RFID antenna set to {ant_id} (0x{ant_id:02X})")
+        except Exception as e:
+            logger.warning(f"Failed to set antenna {ant_id}: {e}")
 
     def _checksum(self, data: bytes) -> int:
         """Calculate checksum per ZTX-RM702 manual: sum from Len byte, exclude 0xA0 header."""
@@ -364,38 +379,58 @@ class RFIDReader:
         scan_passes: int = 3,
         pass_duration: float = 5.0,
         cooldown: float = 0.3,
+        antennas: Optional[List[int]] = None,
     ) -> List[str]:
         """
-        Inventory-optimized RFID scan with multiple passes and union.
+        Inventory-optimized RFID scan with multi-antenna support.
 
-        For inventory counting, stability is more important than speed.
-        This method performs multiple shorter scans and returns the union
-        of all detected tags, reducing miss rates.
+        Uses the 0x8A fast-switch-antenna inventory command when multiple
+        antennas are configured.  Falls back to standard 0x8B for single
+        antenna setups.
 
         Args:
-            scan_passes: Number of scan passes (default 3)
-            pass_duration: Duration of each pass in seconds (default 5.0)
-            cooldown: Delay between passes in seconds (default 0.3)
+            scan_passes: Number of scan passes (default 3).
+                         With dual antennas each pass covers both antennas.
+            pass_duration: Duration of each pass in seconds (default 5.0).
+            cooldown: Delay between passes in seconds (default 0.3).
+            antennas: List of antenna IDs (e.g. [0, 1]).
+                      None or [0] uses single-antenna 0x8B mode.
 
         Returns:
-            List of unique tags detected across all passes
+            List of unique tags detected across all passes (sorted by freq)
         """
         from collections import Counter
 
+        if not antennas:
+            antennas = [0x00]
+
+        multi_ant = len(antennas) > 1
         all_tags = set()
         tag_counter = Counter()
         pass_details = []
 
-        logger.info(
-            f"Starting inventory scan: {scan_passes} passes x {pass_duration}s"
-        )
+        if multi_ant:
+            logger.info(
+                f"Starting fast-switch inventory: {scan_passes} passes x "
+                f"{pass_duration}s, antennas={[f'0x{a:02X}' for a in antennas]}"
+            )
+        else:
+            logger.info(
+                f"Starting inventory scan: {scan_passes} passes x {pass_duration}s"
+            )
 
         for pass_num in range(scan_passes):
-            result = self.read_rfid_tags_continuous(
-                scan_duration=pass_duration,
-                toggle_target=True,
-                idle_break_timeout=0.3,
-            )
+            if multi_ant:
+                result = self._fast_switch_ant_scan(
+                    antennas=antennas,
+                    scan_duration=pass_duration,
+                )
+            else:
+                result = self.read_rfid_tags_continuous(
+                    scan_duration=pass_duration,
+                    toggle_target=True,
+                    idle_break_timeout=0.3,
+                )
 
             pass_tags = set(result['tags'])
             all_tags.update(pass_tags)
@@ -424,6 +459,135 @@ class RFIDReader:
         logger.info(f"Tag detection counts: {dict(tag_counter)}")
 
         return sorted_tags
+
+    def _fast_switch_ant_scan(
+        self,
+        antennas: List[int],
+        scan_duration: float = 8.0,
+        ant_repeat: int = 3,
+        rest_time: int = 0,
+    ) -> Dict[str, Any]:
+        """
+        Fast-switch antenna inventory using command 0x8A (protocol V4.1.7).
+
+        Sends a single command that tells the reader to poll the specified
+        antennas in sequence.  The reader handles antenna switching internally.
+
+        Packet format for cmd 0x8A:
+            [ant_A_id] [ant_A_repeat] [ant_B_id] [ant_B_repeat]
+            [ant_C_id] [ant_C_repeat] [ant_D_id] [ant_D_repeat]
+            [rest_time_ms] [loop_count]
+
+        Antenna ID 0x04 = skip (don't poll that slot).
+
+        Args:
+            antennas: List of antenna IDs to poll (e.g. [0, 1])
+            scan_duration: Approximate total scan time in seconds
+            ant_repeat: Number of inventory rounds per antenna per loop (default 3)
+            rest_time: Milliseconds between antenna switches (default 0)
+
+        Returns:
+            Dict with 'tags', 'tag_count', etc.
+        """
+        from collections import defaultdict
+
+        tag_count: Dict[str, int] = defaultdict(int)
+        bytes_received = 0
+        frames_parsed = 0
+        self.work_mode_tags.clear()
+        self._recv_buffer.clear()
+
+        # Loop count: test results show repeat=1, loops=10-20 is the sweet spot
+        # for dual-antenna setups. More rounds don't improve detection.
+        est_time_per_loop = len(antennas) * ant_repeat * 0.3
+        loop_count = max(10, int(scan_duration / max(est_time_per_loop, 0.1)))
+        loop_count = min(loop_count, 0xFF)  # Protocol limit: 1 byte
+
+        # Build antenna config (4 slots, unused = 0x04)
+        ant_slots = list(antennas[:4])
+        while len(ant_slots) < 4:
+            ant_slots.append(0x04)  # skip
+
+        data = bytes([
+            ant_slots[0], ant_repeat,
+            ant_slots[1], ant_repeat,
+            ant_slots[2], ant_repeat,
+            ant_slots[3], ant_repeat,
+            rest_time & 0xFF,
+            loop_count & 0xFF,
+        ])
+
+        if not self.connect():
+            return {'tags': [], 'tag_count': {}, 'bytes_received': 0, 'frames_parsed': 0}
+
+        try:
+            packet = self._build_packet(0x8A, data)
+            logger.info(
+                f"Sending fast-switch cmd 0x8A: antennas={antennas}, "
+                f"repeat={ant_repeat}, loops={loop_count}, "
+                f"data={data.hex()}"
+            )
+            self.socket.sendall(packet)
+
+            # Collect responses for the expected duration
+            start_time = time.time()
+            last_data_time = start_time
+
+            while (time.time() - start_time) < scan_duration + 2.0:
+                try:
+                    self.socket.settimeout(0.5)
+                    recv_data = self.socket.recv(4096)
+                    if recv_data:
+                        last_data_time = time.time()
+                        bytes_received += len(recv_data)
+                        self._recv_buffer.extend(recv_data)
+                        frames_parsed += self._extract_frames_from_buffer()
+
+                        # Accumulate tags found so far
+                        cycle_tags = set(self.work_mode_tags)
+                        for tag in cycle_tags:
+                            tag_count[tag] += 1
+                        self.work_mode_tags.clear()
+                    else:
+                        if (time.time() - last_data_time) > 2.0:
+                            break
+                except socket.timeout:
+                    if (time.time() - last_data_time) > 2.0:
+                        break
+                    continue
+                except Exception as e:
+                    logger.error(f"Fast-switch receive error: {e}")
+                    break
+
+            # Process any remaining buffer
+            if self._recv_buffer:
+                frames_parsed += self._extract_frames_from_buffer()
+                for tag in self.work_mode_tags:
+                    tag_count[tag] += 1
+
+            detected_tags = list(tag_count.keys())
+            logger.info(
+                f"Fast-switch scan complete: {len(detected_tags)} tags, "
+                f"{bytes_received} bytes, {frames_parsed} frames"
+            )
+
+            return {
+                'tags': detected_tags,
+                'tag_count': dict(tag_count),
+                'bytes_received': bytes_received,
+                'frames_parsed': frames_parsed,
+            }
+
+        except Exception as e:
+            logger.error(f"Fast-switch scan error: {e}")
+            return {
+                'tags': list(tag_count.keys()),
+                'tag_count': dict(tag_count),
+                'bytes_received': bytes_received,
+                'frames_parsed': frames_parsed,
+            }
+        finally:
+            self.disconnect()
 
     def read_rfid_tags_voting(
         self,
@@ -538,10 +702,18 @@ class RFIDReader:
         toggle_target: bool = True,
         idle_break_timeout: Optional[float] = None,
         log_interval: float = 0.5,
+        antenna: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Continuous scan with cycle-by-cycle approach (based on master branch).
         This is more reliable than the optimized version that had timing issues.
+
+        Args:
+            scan_duration: Total scan time in seconds
+            toggle_target: Alternate inventory target each cycle
+            idle_break_timeout: Seconds of silence before ending a cycle
+            log_interval: Logging interval
+            antenna: Override antenna ID (e.g. 0x00, 0x01). None uses default.
         """
         from collections import defaultdict
 
@@ -553,6 +725,10 @@ class RFIDReader:
 
         if not self.connect():
             return {'tags': [], 'tag_count': {}, 'bytes_received': 0, 'frames_parsed': 0}
+
+        # Override antenna if specified (after connect which calls _init_reader)
+        if antenna is not None:
+            self._set_antenna(antenna)
 
         try:
             session = 0x01
@@ -685,9 +861,10 @@ class RFIDReader:
         """
         buf = self._recv_buffer
 
-        # Buffer overflow protection: normal RFID frames are small (<100 bytes)
-        # If buffer exceeds 1KB, we've likely lost sync - clear it to recover
-        MAX_BUFFER_SIZE = 1024
+        # Buffer overflow protection: with fast-switch (0x8A) the reader can
+        # send 30+ tags per burst (~30 bytes each = ~1KB).  Allow up to 8KB
+        # before giving up on sync recovery.
+        MAX_BUFFER_SIZE = 8192
         if len(buf) > MAX_BUFFER_SIZE:
             logger.warning("Buffer overflow (%d bytes) or sync lost, clearing buffer", len(buf))
             buf.clear()
@@ -786,7 +963,8 @@ class RFIDReader:
         if cmd == 0x8B:
             self._parse_tag_data_bytes(data)
         elif cmd == 0x8A:
-            logger.debug("Received inventory stop response")
+            # 0x8A = fast switch antenna inventory response (contains tag data)
+            self._parse_tag_data_bytes(data)
         else:
             logger.debug(f"Unknown command: 0x{cmd:02X}")
 
@@ -833,7 +1011,7 @@ class RFIDReader:
             rssi_dbm = rssi_byte - 129 if rssi_byte < 129 else rssi_byte - 129
             if self._validate_epc(epc_hex) and epc_hex not in IGNORED_TAGS:
                 self.work_mode_tags.add(epc_hex)
-                logger.info(f"Tag: EPC={epc_hex}, RSSI={rssi_dbm}dBm")
+                logger.debug(f"Tag: EPC={epc_hex}, RSSI={rssi_dbm}dBm")
                 if self._tag_callback:
                     self._tag_callback(epc_hex)
 
@@ -1119,16 +1297,18 @@ class RaspberryPiHardware(HardwareInterface):
         self,
         scan_passes: int = 3,
         pass_duration: float = 5.0,
+        antennas: Optional[List[int]] = None,
     ) -> List[str]:
         """
         Inventory-optimized RFID scan for stable counting.
 
-        Performs multiple scan passes and returns union of all detected tags.
-        This is more reliable than single scan for inventory purposes.
+        Performs multiple scan passes across configured antennas and returns
+        union of all detected tags.
 
         Args:
             scan_passes: Number of scan passes (default 3)
             pass_duration: Duration of each pass in seconds (default 5.0)
+            antennas: List of antenna IDs to cycle through
 
         Returns:
             List of unique tags detected across all passes
@@ -1139,6 +1319,7 @@ class RaspberryPiHardware(HardwareInterface):
         return self._rfid_reader.read_rfid_tags_inventory(
             scan_passes=scan_passes,
             pass_duration=pass_duration,
+            antennas=antennas,
         )
 
     def unlock_drawer(self, drawer_id: int) -> bool:

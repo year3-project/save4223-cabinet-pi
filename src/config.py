@@ -43,8 +43,9 @@ DEFAULT_CONFIG = {
     # RFID inventory mode - multi-pass scan for maximum accuracy
     # Used by main.py for inventory counting (accuracy prioritized over speed)
     'rfid_inventory': {
-        'scan_passes': 3,         # Number of scan passes
-        'pass_duration': 5.0,     # Duration of each pass in seconds
+        'scan_passes': 2,         # Number of scan passes
+        'pass_duration': 8.0,     # Duration of each pass in seconds
+        'antennas': [0, 1],       # Antenna IDs to cycle through (0x00=ant1, 0x01=ant2)
     },
 
     # Cache settings

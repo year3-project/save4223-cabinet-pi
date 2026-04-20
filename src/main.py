@@ -737,26 +737,29 @@ class SmartCabinet:
 
     def _scan_rfid(self) -> list:
         """
-        Perform RFID inventory scan with multi-pass accumulation for maximum accuracy.
+        Perform RFID inventory scan with multi-pass, multi-antenna accumulation.
 
-        Uses multiple scan passes and returns the union of all detected tags.
-        This ensures minimal missed reads for inventory counting - accuracy is
-        prioritized over speed.
+        Uses multiple scan passes across configured antennas and returns the
+        union of all detected tags. With dual antennas each pass covers a
+        different physical area, improving read accuracy.
 
         Parameters are configurable via CONFIG['rfid_inventory'].
         """
         rfid_cfg = CONFIG.get('rfid_inventory', {})
         scan_passes = rfid_cfg.get('scan_passes', 3)
         pass_duration = rfid_cfg.get('pass_duration', 5.0)
+        antennas = rfid_cfg.get('antennas')
 
         logger.info(
-            "Starting RFID inventory scan (%s passes x %ss each)",
+            "Starting RFID inventory scan (%s passes x %ss each, antennas=%s)",
             scan_passes,
             pass_duration,
+            antennas,
         )
         result = self.hardware.read_rfid_tags_inventory(
             scan_passes=scan_passes,
             pass_duration=pass_duration,
+            antennas=antennas,
         )
         logger.info(f"RFID inventory scan complete: {len(result)} unique tags detected")
         return result

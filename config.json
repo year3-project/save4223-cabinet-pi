@@ -15,9 +15,10 @@
         "scan_duration": 5.0
     },
     "rfid_inventory": {
-        "scan_passes": 3,
+        "scan_passes": 2,
         "pass_duration": 5.0,
-        "description": "Multi-pass inventory scan - accuracy prioritized"
+        "antennas": [0, 1],
+        "description": "Dual-antenna fast-switch inventory - accuracy prioritized"
     },
     "sync_interval": 60,
     "num_drawers": 4,
