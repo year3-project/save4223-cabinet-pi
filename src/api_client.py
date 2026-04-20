@@ -227,15 +227,37 @@ class APIClient:
     def pair_card(self, pairing_token: str, card_uid: str, cabinet_id: int) -> Dict[str, Any]:
         """
         Pair an NFC card with a user using a pairing token.
-        
+
         POST /api/edge/pair-card
         """
         logger.debug(f"Pairing card: {card_uid[:10]}... with token")
-        
+
         result = self._request('POST', '/api/edge/pair-card', json={
             'pairing_token': pairing_token,
             'card_uid': card_uid,
             'cabinet_id': cabinet_id,
         })
-        
+
+        return result
+
+    def signin(self, user_id: str, expires_at: str) -> Dict[str, Any]:
+        """
+        Authenticate user via QR sign-in.
+
+        POST /api/edge/signin
+
+        Args:
+            user_id: User UUID from QR code
+            expires_at: ISO timestamp from QR code
+
+        Returns:
+            User info dict with user_id, user_name, email, role
+        """
+        logger.debug(f"QR sign-in for user: {user_id[:8]}...")
+
+        result = self._request('POST', '/api/edge/signin', json={
+            'user_id': user_id,
+            'expires_at': expires_at,
+        })
+
         return result

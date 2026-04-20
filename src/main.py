@@ -71,6 +71,7 @@ class SmartCabinet:
         self.session_id: Optional[str] = None
         self.session_start_time: Optional[datetime] = None
         self._pairing_token: Optional[str] = None  # For QR-first pairing flow
+        self._signin_data: Optional[Dict[str, str]] = None  # For QR sign-in flow
 
         # Initialize components
         logger.info("Initializing Smart Cabinet...")
@@ -190,6 +191,7 @@ class SmartCabinet:
         self.current_card_uid = None
         self.session_id = None
         self.session_start_time = None
+        self._signin_data = None
 
         self._send_to_display({
             'type': 'STATE_CHANGE',
@@ -205,9 +207,44 @@ class SmartCabinet:
         self._send_to_display({
             'type': 'STATE_CHANGE',
             'state': 'AUTHENTICATING',
-            'message': 'Reading card...'
+            'message': 'Authenticating...'
         })
 
+        # QR sign-in path (data already captured in _handle_locked)
+        if self._signin_data:
+            import threading
+            auth_result = [None]
+            def do_signin():
+                try:
+                    resp = self.api.signin(
+                        user_id=self._signin_data['user_id'],
+                        expires_at=self._signin_data['expires_at'],
+                    )
+                    auth_result[0] = {'authorized': True, **resp}
+                except APIError as e:
+                    auth_result[0] = {'authorized': False, 'reason': str(e)}
+            auth_thread = threading.Thread(target=do_signin)
+            auth_thread.start()
+            auth_thread.join(timeout=5)
+            if auth_thread.is_alive():
+                logger.warning("QR sign-in timed out after 5 seconds")
+                self.hardware.beep_error()
+                self._send_to_display({
+                    'type': 'AUTH_FAILURE',
+                    'error': 'Authentication timeout'
+                })
+                time.sleep(2)
+                self.state_machine.transition(SystemState.LOCKED)
+                return
+            result = auth_result[0]
+
+            if result.get('authorized') or result.get('success'):
+                self._handle_auth_success(result)
+            else:
+                self._handle_auth_failure(result)
+            return
+
+        # NFC card path
         # Use card already captured in _handle_locked, or wait for a new scan
         card_uid = self.current_card_uid or self.hardware.read_nfc(timeout=30)
 
@@ -818,14 +855,21 @@ class SmartCabinet:
                 card_type = result['type']
 
                 if card_type == 'qr':
-                    # QR code — check for pairing token
+                    # QR code — check sign-in first, then pairing
+                    signin_data = self.pairing_handler.extract_signin_from_qr(raw)
+                    if signin_data:
+                        logger.info(f"Sign-in QR detected: user {signin_data['user_id'][:8]}...")
+                        self._signin_data = signin_data
+                        self.state_machine.transition(SystemState.AUTHENTICATING)
+                        return
+
                     token = self.pairing_handler.extract_token_from_qr(raw)
                     if token:
                         logger.info(f"Pairing token detected via HID: {token}")
                         self._enter_pairing_mode(token)
                         return
-                    else:
-                        logger.debug(f"QR code detected but not a pairing token: {raw[:30]}...")
+
+                    logger.debug(f"QR code detected but not recognized: {raw[:30]}...")
                 elif card_type == 'nfc':
                     # NFC card — go straight to authentication
                     logger.info(f"Card detected: {raw[:10]}...")
@@ -833,9 +877,16 @@ class SmartCabinet:
                     self.state_machine.transition(SystemState.AUTHENTICATING)
             return
 
-        # Non-HID mode: Check for QR code first (pairing mode)
+        # Non-HID mode: Check for QR code first (sign-in or pairing)
         qr = self.hardware.read_qr(timeout=0.1)
         if qr:
+            signin_data = self.pairing_handler.extract_signin_from_qr(qr)
+            if signin_data:
+                logger.info(f"Sign-in QR detected: user {signin_data['user_id'][:8]}...")
+                self._signin_data = signin_data
+                self.state_machine.transition(SystemState.AUTHENTICATING)
+                return
+
             token = self.pairing_handler.extract_token_from_qr(qr)
             if token:
                 logger.info(f"Pairing QR detected: {token}")

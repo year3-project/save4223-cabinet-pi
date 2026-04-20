@@ -65,6 +65,41 @@ class PairingHandler:
                     changed = True
         return cleaned
 
+    def extract_signin_from_qr(self, qr_content: str) -> Optional[Dict[str, str]]:
+        """
+        Extract sign-in data from QR code content.
+
+        Server generates sign-in QR codes containing JSON:
+          {"type": "SIGNIN", "user_id": "uuid", "name": "...", "exp": "ISO timestamp"}
+
+        Returns dict with 'user_id' and 'expires_at' if valid SIGNIN QR, else None.
+        """
+        if not qr_content:
+            return None
+
+        raw = qr_content.strip()
+        if not raw.startswith('{'):
+            return None
+
+        try:
+            import json
+            data = json.loads(raw)
+            if data.get('type') != 'SIGNIN':
+                return None
+
+            user_id = data.get('user_id', '')
+            exp = data.get('exp', '')
+            if not user_id or not exp:
+                logger.debug("SIGNIN QR missing user_id or exp")
+                return None
+
+            logger.debug(f"SIGNIN QR parsed: user_id={user_id[:8]}...")
+            return {'user_id': user_id, 'expires_at': exp}
+
+        except (json.JSONDecodeError, AttributeError) as e:
+            logger.debug(f"Failed to parse SIGNIN QR JSON: {e}")
+            return None
+
     def extract_token_from_qr(self, qr_content: str) -> Optional[str]:
         """
         Extract pairing token from QR code content.
@@ -93,7 +128,11 @@ class PairingHandler:
             try:
                 import json
                 data = json.loads(raw)
-                if data.get('type') == 'CARD_PAIRING':
+                qr_type = data.get('type', '')
+                if qr_type == 'SIGNIN':
+                    # Not a pairing QR — caller should use extract_signin_from_qr
+                    return None
+                if qr_type == 'CARD_PAIRING':
                     token = data.get('token', '').upper()
                     if self.QR_TOKEN_PATTERN.match(token):
                         logger.debug(f"Token extracted from raw JSON: {token}")
