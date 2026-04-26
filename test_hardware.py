@@ -76,27 +76,29 @@ def test_nfc_reader(hw):
         return False
 
 
-def test_rfid_reader(hw):
+def test_rfid_reader(hw, quick=False):
     """Test RFID reader (TCP socket) with voting mechanism."""
-    rfid_cfg = CONFIG.get('rfid', {})
-    total_cycles = rfid_cfg.get('voting_cycles', 10)
-    min_appearances = rfid_cfg.get('min_appearances', 3)
-    read_interval = rfid_cfg.get('read_interval', 1.0)
-    idle_break_timeout = rfid_cfg.get('idle_break_timeout', 0.2)
-    max_cycle_wait = rfid_cfg.get('max_cycle_wait', 2.0)
-    log_each_cycle = rfid_cfg.get('log_each_cycle', False)
-
     rfid_inv_cfg = CONFIG.get('rfid_inventory', {})
-    scan_passes = rfid_inv_cfg.get('scan_passes', 3)
-    pass_duration = rfid_inv_cfg.get('pass_duration', 5.0)
     antennas = rfid_inv_cfg.get('antennas')
 
+    if quick:
+        scan_passes = rfid_inv_cfg.get('quick_passes', 1)
+        pass_duration = rfid_inv_cfg.get('quick_duration', 2.0)
+        label = f"QUICK SCAN (~{pass_duration:.0f}s)"
+    else:
+        scan_passes = rfid_inv_cfg.get('scan_passes', 3)
+        pass_duration = rfid_inv_cfg.get('pass_duration', 5.0)
+        label = "INVENTORY MODE"
+
     print("\n" + "=" * 50)
-    print("TESTING RFID READER (INVENTORY MODE)")
+    print(f"TESTING RFID READER ({label})")
     print(f"  Host: {RFID_HOST}:{RFID_PORT}")
     print(f"  Config: {scan_passes} passes x {pass_duration}s, antennas={antennas}")
     print("=" * 50)
     print("Place RFID tags near the antennas...")
+
+    # Unlock cabinet so user can freely add/remove items while testing
+    hw.unlock_all()
 
     tags = hw.read_rfid_tags_inventory(
         scan_passes=scan_passes,
@@ -105,9 +107,7 @@ def test_rfid_reader(hw):
     )
 
     if tags:
-        print(f"  PASS  {len(tags)} confirmed tag(s):")
-        for tag in tags:
-            print(f"          {tag}")
+        print(f"  PASS  {len(tags)} confirmed tag(s)")
         return True
     else:
         print("  No RFID tags detected")
@@ -333,7 +333,8 @@ def test_all(hw):
 def main():
     parser = argparse.ArgumentParser(description='Smart Cabinet hardware test')
     parser.add_argument('--nfc',   action='store_true', help='Test NFC reader only')
-    parser.add_argument('--rfid',  action='store_true', help='Test RFID reader only')
+    parser.add_argument('--rfid',  action='store_true', help='Test RFID reader only (full inventory)')
+    parser.add_argument('--rfid-quick', action='store_true', help='Quick RFID scan (~2s)')
     parser.add_argument('--locks', action='store_true', help='Test solenoid locks only')
     parser.add_argument('--leds',  action='store_true', help='Test LED strip only')
     parser.add_argument('--gpio',  action='store_true', help='Test drawer switches only')
@@ -362,6 +363,8 @@ def main():
     try:
         if args.nfc:
             success = test_nfc_reader(hw)
+        elif args.rfid_quick:
+            success = test_rfid_reader(hw, quick=True)
         elif args.rfid:
             success = test_rfid_reader(hw)
         elif args.locks:

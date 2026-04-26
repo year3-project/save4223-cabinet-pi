@@ -45,6 +45,8 @@ DEFAULT_CONFIG = {
     'rfid_inventory': {
         'scan_passes': 2,         # Number of scan passes
         'pass_duration': 8.0,     # Duration of each pass in seconds
+        'quick_passes': 1,        # Quick scan passes
+        'quick_duration': 2.0,    # Quick scan duration in seconds
         'antennas': [0, 1],       # Antenna IDs to cycle through (0x00=ant1, 0x01=ant2)
     },
 
