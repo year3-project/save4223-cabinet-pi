@@ -1349,7 +1349,7 @@ class RaspberryPiHardware(HardwareInterface):
         )
 
     def unlock_drawer(self, drawer_id: int) -> bool:
-        """Unlock a specific solenoid."""
+        """Unlock a specific solenoid (energize HIGH until lock is called)."""
         if drawer_id < 0 or drawer_id >= len(SOLENOID_PINS):
             return False
 
@@ -1364,7 +1364,7 @@ class RaspberryPiHardware(HardwareInterface):
             return False
 
     def lock_drawer(self, drawer_id: int) -> bool:
-        """Lock a specific solenoid."""
+        """Lock a specific solenoid (de-energize LOW)."""
         if drawer_id < 0 or drawer_id >= len(SOLENOID_PINS):
             return False
 
@@ -1379,7 +1379,7 @@ class RaspberryPiHardware(HardwareInterface):
             return False
 
     def unlock_all(self) -> bool:
-        """Unlock all solenoids."""
+        """Unlock all solenoids (energize HIGH until lock is called)."""
         try:
             for i in range(self.num_drawers):
                 self.unlock_drawer(i)
@@ -1389,7 +1389,7 @@ class RaspberryPiHardware(HardwareInterface):
             return False
 
     def lock_all(self) -> bool:
-        """Lock all solenoids."""
+        """Lock all solenoids (de-energize LOW)."""
         try:
             for i in range(self.num_drawers):
                 self.lock_drawer(i)
