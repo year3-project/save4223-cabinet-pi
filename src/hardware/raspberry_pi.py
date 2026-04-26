@@ -379,6 +379,8 @@ class RFIDReader:
         pass_duration: float = 5.0,
         cooldown: float = 0.3,
         antennas: Optional[List[int]] = None,
+        ant_repeat: int = 3,
+        loop_count: Optional[int] = None,
     ) -> List[str]:
         """
         Inventory-optimized RFID scan with multi-antenna support.
@@ -411,38 +413,47 @@ class RFIDReader:
         if multi_ant:
             logger.info(
                 f"Starting fast-switch inventory: {scan_passes} passes x "
-                f"{pass_duration}s, antennas={[f'0x{a:02X}' for a in antennas]}"
+                f"{pass_duration}s, antennas={[f'0x{a:02X}' for a in antennas]}, "
+                f"repeat={ant_repeat}, loops={loop_count}"
             )
         else:
             logger.info(
                 f"Starting inventory scan: {scan_passes} passes x {pass_duration}s"
             )
 
-        for pass_num in range(scan_passes):
-            if multi_ant:
-                result = self._fast_switch_ant_scan(
-                    antennas=antennas,
-                    scan_duration=pass_duration,
+        if not self.connect():
+            return []
+
+        try:
+            for pass_num in range(scan_passes):
+                if multi_ant:
+                    result = self._fast_switch_ant_scan(
+                        antennas=antennas,
+                        scan_duration=pass_duration,
+                        ant_repeat=ant_repeat,
+                        loop_count=loop_count,
+                    )
+                else:
+                    result = self.read_rfid_tags_continuous(
+                        scan_duration=pass_duration,
+                        toggle_target=True,
+                        idle_break_timeout=0.3,
+                    )
+
+                pass_tags = set(result['tags'])
+                all_tags.update(pass_tags)
+                tag_counter.update(result['tag_count'])
+                pass_details.append(len(pass_tags))
+
+                logger.info(
+                    f"Pass {pass_num + 1}/{scan_passes}: {len(pass_tags)} tags "
+                    f"(cumulative: {len(all_tags)})"
                 )
-            else:
-                result = self.read_rfid_tags_continuous(
-                    scan_duration=pass_duration,
-                    toggle_target=True,
-                    idle_break_timeout=0.3,
-                )
 
-            pass_tags = set(result['tags'])
-            all_tags.update(pass_tags)
-            tag_counter.update(result['tag_count'])
-            pass_details.append(len(pass_tags))
-
-            logger.info(
-                f"Pass {pass_num + 1}/{scan_passes}: {len(pass_tags)} tags "
-                f"(cumulative: {len(all_tags)})"
-            )
-
-            if pass_num < scan_passes - 1:
-                time.sleep(cooldown)
+                if pass_num < scan_passes - 1:
+                    time.sleep(cooldown)
+        finally:
+            self.disconnect()
 
         # Sort by detection frequency (most reliable first)
         sorted_tags = sorted(
@@ -465,6 +476,7 @@ class RFIDReader:
         scan_duration: float = 8.0,
         ant_repeat: int = 3,
         rest_time: int = 0,
+        loop_count: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Fast-switch antenna inventory using command 0x8A (protocol V4.1.7).
@@ -496,10 +508,21 @@ class RFIDReader:
         self.work_mode_tags.clear()
         self._recv_buffer.clear()
 
-        # Loop count: test results show repeat=1, loops=10-20 is the sweet spot
-        # for dual-antenna setups. More rounds don't improve detection.
-        est_time_per_loop = len(antennas) * ant_repeat * 0.3
-        loop_count = max(10, int(scan_duration / max(est_time_per_loop, 0.1)))
+        # Drain any leftover data from socket
+        try:
+            self.socket.settimeout(0.1)
+            while True:
+                drain = self.socket.recv(4096)
+                if not drain:
+                    break
+        except (socket.timeout, Exception):
+            pass
+        self._recv_buffer.clear()
+
+        # Loop count: use provided value or auto-compute
+        if loop_count is None:
+            est_time_per_loop = len(antennas) * ant_repeat * 0.3
+            loop_count = max(10, int(scan_duration / max(est_time_per_loop, 0.1)))
         loop_count = min(loop_count, 0xFF)  # Protocol limit: 1 byte
 
         # Build antenna config (4 slots, unused = 0x04)
@@ -516,7 +539,7 @@ class RFIDReader:
             loop_count & 0xFF,
         ])
 
-        if not self.connect():
+        if not self.connected:
             return {'tags': [], 'tag_count': {}, 'bytes_received': 0, 'frames_parsed': 0}
 
         try:
@@ -585,8 +608,6 @@ class RFIDReader:
                 'bytes_received': bytes_received,
                 'frames_parsed': frames_parsed,
             }
-        finally:
-            self.disconnect()
 
     def read_rfid_tags_voting(
         self,
@@ -1297,6 +1318,8 @@ class RaspberryPiHardware(HardwareInterface):
         scan_passes: int = 3,
         pass_duration: float = 5.0,
         antennas: Optional[List[int]] = None,
+        ant_repeat: int = 3,
+        loop_count: Optional[int] = None,
     ) -> List[str]:
         """
         Inventory-optimized RFID scan for stable counting.
@@ -1308,6 +1331,8 @@ class RaspberryPiHardware(HardwareInterface):
             scan_passes: Number of scan passes (default 3)
             pass_duration: Duration of each pass in seconds (default 5.0)
             antennas: List of antenna IDs to cycle through
+            ant_repeat: Inventory rounds per antenna per loop (0x8A)
+            loop_count: Number of loops for fast-switch command (None = auto)
 
         Returns:
             List of unique tags detected across all passes
@@ -1319,6 +1344,8 @@ class RaspberryPiHardware(HardwareInterface):
             scan_passes=scan_passes,
             pass_duration=pass_duration,
             antennas=antennas,
+            ant_repeat=ant_repeat,
+            loop_count=loop_count,
         )
 
     def unlock_drawer(self, drawer_id: int) -> bool:

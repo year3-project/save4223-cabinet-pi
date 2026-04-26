@@ -786,17 +786,23 @@ class SmartCabinet:
         scan_passes = rfid_cfg.get('scan_passes', 3)
         pass_duration = rfid_cfg.get('pass_duration', 5.0)
         antennas = rfid_cfg.get('antennas')
+        ant_repeat = rfid_cfg.get('ant_repeat', 3)
+        loop_count = rfid_cfg.get('loop_count', 10)
 
         logger.info(
-            "Starting RFID inventory scan (%s passes x %ss each, antennas=%s)",
+            "Starting RFID inventory scan (%s passes x %ss each, antennas=%s, repeat=%s, loops=%s)",
             scan_passes,
             pass_duration,
             antennas,
+            ant_repeat,
+            loop_count,
         )
         result = self.hardware.read_rfid_tags_inventory(
             scan_passes=scan_passes,
             pass_duration=pass_duration,
             antennas=antennas,
+            ant_repeat=ant_repeat,
+            loop_count=loop_count,
         )
         logger.info(f"RFID inventory scan complete: {len(result)} unique tags detected")
         return result

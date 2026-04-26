@@ -80,6 +80,8 @@ def test_rfid_reader(hw, quick=False):
     """Test RFID reader (TCP socket) with voting mechanism."""
     rfid_inv_cfg = CONFIG.get('rfid_inventory', {})
     antennas = rfid_inv_cfg.get('antennas')
+    ant_repeat = rfid_inv_cfg.get('ant_repeat', 3)
+    loop_count = rfid_inv_cfg.get('loop_count', 10)
 
     if quick:
         scan_passes = rfid_inv_cfg.get('quick_passes', 1)
@@ -93,7 +95,7 @@ def test_rfid_reader(hw, quick=False):
     print("\n" + "=" * 50)
     print(f"TESTING RFID READER ({label})")
     print(f"  Host: {RFID_HOST}:{RFID_PORT}")
-    print(f"  Config: {scan_passes} passes x {pass_duration}s, antennas={antennas}")
+    print(f"  Config: {scan_passes} passes x {pass_duration}s, antennas={antennas}, repeat={ant_repeat}, loops={loop_count}")
     print("=" * 50)
     print("Place RFID tags near the antennas...")
 
@@ -101,6 +103,8 @@ def test_rfid_reader(hw, quick=False):
         scan_passes=scan_passes,
         pass_duration=pass_duration,
         antennas=antennas,
+        ant_repeat=ant_repeat,
+        loop_count=loop_count,
     )
 
     if tags:
