@@ -424,6 +424,17 @@ class RFIDReader:
         if not self.connect():
             return []
 
+        # Drain power command response and let reader settle
+        time.sleep(0.5)
+        try:
+            self.socket.settimeout(0.2)
+            while True:
+                drain = self.socket.recv(4096)
+                if not drain:
+                    break
+        except (socket.timeout, Exception):
+            pass
+
         try:
             for pass_num in range(scan_passes):
                 if multi_ant:
