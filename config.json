@@ -15,7 +15,7 @@
         "scan_duration": 5.0
     },
     "rfid_inventory": {
-        "scan_passes": 3,
+        "scan_passes": 5,
         "pass_duration": 5.0,
         "quick_passes": 1,
         "quick_duration": 2.0,

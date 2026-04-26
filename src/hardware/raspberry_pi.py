@@ -273,7 +273,6 @@ class RFIDReader:
             self.connected = True
             logger.info(f"RFID reader connected to {self.host}:{self.port}")
 
-            # Initialize antenna and power for optimal reading
             self._init_reader()
 
             return True

@@ -97,9 +97,6 @@ def test_rfid_reader(hw, quick=False):
     print("=" * 50)
     print("Place RFID tags near the antennas...")
 
-    # Unlock cabinet so user can freely add/remove items while testing
-    hw.unlock_all()
-
     tags = hw.read_rfid_tags_inventory(
         scan_passes=scan_passes,
         pass_duration=pass_duration,
