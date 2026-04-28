@@ -260,6 +260,8 @@ class PairingHandler:
                     auth_result={
                         'user_id': result.get('userId'),
                         'user_name': result.get('userName', 'Unknown'),
+                        'email': result.get('email', ''),
+                        'role': result.get('role', 'USER'),
                         'cabinet_id': cabinet_id
                     },
                     ttl=86400 * 30  # 30 days

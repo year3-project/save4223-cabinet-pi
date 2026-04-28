@@ -1106,6 +1106,9 @@ class RaspberryPiHardware(HardwareInterface):
             GPIO.setup(pin, GPIO.OUT)
             GPIO.output(pin, GPIO.LOW) # Ensure locked on start
 
+        # GPIO 9 is SPI0_MISO with hardware pull-up; force LOW atomically
+        GPIO.setup(9, GPIO.OUT, initial=GPIO.LOW)
+
         # Setup drawer switch pins (internal pull-down: HIGH = drawer open)
         for pin in DRAWER_SWITCH_PINS:
             GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)

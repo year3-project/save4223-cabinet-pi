@@ -425,7 +425,7 @@ class SmartCabinet:
             # Check if same card scanned (close command)
             card = self.hardware.read_nfc(timeout=0.5)
 
-            if card == self.current_card_uid:
+            if card is not None and card == self.current_card_uid:
                 if self.hardware.are_all_drawers_closed():
                     logger.info("Close command received, all drawers closed")
                     self._send_to_display({
@@ -568,6 +568,10 @@ class SmartCabinet:
             return False
 
         try:
+            if not self.current_user_id:
+                logger.error("Cannot sync session: user_id is missing")
+                return False
+
             result = self.api.sync_session(
                 session_id=self.session_id,
                 cabinet_id=CONFIG['cabinet_id'],

@@ -189,13 +189,15 @@ class LocalDB:
         
         with self._conn:
             self._conn.execute('''
-                INSERT OR REPLACE INTO auth_cache 
-                (card_uid, user_id, user_name, cabinet_id, cached_at, expires_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT OR REPLACE INTO auth_cache
+                (card_uid, user_id, user_name, email, role, cabinet_id, cached_at, expires_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 card_uid,
                 auth_result.get('user_id'),
                 auth_result.get('user_name'),
+                auth_result.get('email'),
+                auth_result.get('role', 'USER'),
                 auth_result.get('cabinet_id'),
                 datetime.now(),
                 expires
@@ -213,6 +215,8 @@ class LocalDB:
                 'authorized': True,
                 'user_id': row['user_id'],
                 'user_name': row['user_name'],
+                'email': row['email'] or '',
+                'role': row['role'] or 'USER',
                 'cabinet_id': row['cabinet_id'],
                 'source': 'cache'
             }
