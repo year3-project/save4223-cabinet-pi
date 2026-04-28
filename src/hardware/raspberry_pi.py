@@ -1106,9 +1106,6 @@ class RaspberryPiHardware(HardwareInterface):
             GPIO.setup(pin, GPIO.OUT)
             GPIO.output(pin, GPIO.LOW) # Ensure locked on start
 
-        # GPIO 9 is SPI0_MISO with hardware pull-up; force LOW atomically
-        GPIO.setup(9, GPIO.OUT, initial=GPIO.LOW)
-
         # Setup drawer switch pins (internal pull-down: HIGH = drawer open)
         for pin in DRAWER_SWITCH_PINS:
             GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
@@ -1495,9 +1492,21 @@ class RaspberryPiHardware(HardwareInterface):
             self.set_all_leds(LEDColor.OFF)
             time.sleep(0.1)  # Allow LED strip to update
 
-        # Clean up GPIO
+        # Clean up GPIO — only non-solenoid pins
+        # Solenoid pins must stay OUTPUT LOW to prevent driver board
+        # from floating HIGH and energizing solenoids after exit
         if RPI_AVAILABLE:
-            GPIO.cleanup()
+            non_solenoid_pins = (
+                DRAWER_SWITCH_PINS + [LED_PIN]
+            )
+            for pin in non_solenoid_pins:
+                try:
+                    GPIO.cleanup(pin)
+                except Exception:
+                    pass
+            # Ensure solenoids stay locked (not cleaned up)
+            for pin in SOLENOID_PINS:
+                GPIO.output(pin, GPIO.LOW)
 
         self._initialized = False
         logger.info("Hardware cleanup complete")
