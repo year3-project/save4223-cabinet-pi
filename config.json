@@ -1,7 +1,7 @@
 {
     "server_url": "https://save4223.isd-hub.com",
     "edge_secret": "edge_device_secret_key",
-    "cabinet_id": 7,
+    "cabinet_id": 1,
     "db_path": "./data/local.db",
     "session_timeout": 60,
     "rfid_scan_count": 5,
@@ -19,7 +19,7 @@
         "pass_duration": 3.0,
         "quick_passes": 1,
         "quick_duration": 2.0,
-        "antennas": [0, 1],
+        "antennas": [0,1],
         "ant_repeat": 2,
         "loop_count": 12,
         "description": "Dual-antenna fast-switch inventory - accuracy prioritized"

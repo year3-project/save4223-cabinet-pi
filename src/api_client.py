@@ -261,3 +261,35 @@ class APIClient:
         })
 
         return result
+
+    def reconcile(self, cabinet_id: int, scanned_tags: list,
+                  missing_items: list = None,
+                  recovered_items: list = None) -> Dict[str, Any]:
+        """
+        Send inventory reconciliation data to server.
+
+        POST /api/edge/reconcile
+
+        Args:
+            cabinet_id: Cabinet identifier
+            scanned_tags: All RFID tags detected in scan
+            missing_items: Items that were expected but not found
+            recovered_items: Items that were MISSING and reappeared
+
+        Returns:
+            Server response with reconciliation result
+        """
+        logger.info(
+            f"Sending reconciliation: {len(scanned_tags)} scanned, "
+            f"{len(missing_items or [])} missing, {len(recovered_items or [])} recovered"
+        )
+
+        result = self._request('POST', '/api/edge/reconcile', json={
+            'cabinet_id': cabinet_id,
+            'scanned_tags': scanned_tags,
+            'missing_items': missing_items or [],
+            'recovered_items': recovered_items or [],
+            'total_scanned': len(scanned_tags),
+        })
+
+        return result

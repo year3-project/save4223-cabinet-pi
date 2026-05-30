@@ -10,7 +10,7 @@ import logging
 import threading
 import socket
 import glob
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union
 from pathlib import Path
 
 try:
@@ -284,13 +284,48 @@ class RFIDReader:
     def _init_reader(self):
         """Initialize reader settings for optimal tag detection."""
         try:
-            # Set output power to 33dBm (0x21) per protocol manual
-            self._set_output_power(0x21)
+            # Set frequency region to max range (865-928MHz, custom spectrum)
+            self._set_frequency_region()
             time.sleep(0.05)
 
-            logger.debug("RFID reader initialized (power=33dBm)")
+            # Set output power to 30dBm (0x1E) - stay below PA saturation limit
+            # 33dBm causes RX overload and self-jamming in metal cabinets
+            self._set_output_power(0x1E)
+            time.sleep(0.05)
+
+            logger.debug("RFID reader initialized (power=30dBm, freq=865-928MHz)")
         except Exception as e:
             logger.warning(f"RFID initialization warning: {e}")
+
+    def _set_frequency_region(self):
+        """Set frequency region to custom range (865-928MHz).
+
+        The reader hardware physically maxes out at 928MHz. Frequencies above
+        that cause PLL lock failures (0x52) and periodic read blind spots.
+
+        Command 0x78 (set frequency region), mode 2 (user defined):
+            Data: [mode] [start_freq_2] [start_freq_1] [start_freq_0]
+                  [freq_space] [freq_quantity_H] [freq_quantity_L]
+        """
+        try:
+            # 865000 KHz = 0x0D32E8, high byte first
+            start_freq = bytes([0x0D, 0x32, 0xE8])
+            freq_space = bytes([0x14])              # 20 -> 200 KHz interval
+            freq_quantity = bytes([0x01, 0x3C])     # 316 channels -> 865~928MHz
+
+            data = bytes([0x02]) + start_freq + freq_space + freq_quantity
+            packet = self._build_packet(0x78, data)
+            if self.socket:
+                self.socket.sendall(packet)
+                time.sleep(0.1)
+                self.socket.settimeout(0.5)
+                try:
+                    self.socket.recv(4096)
+                except socket.timeout:
+                    pass
+            logger.info("RFID frequency set to custom 865-928MHz (316 channels, 200KHz spacing)")
+        except Exception as e:
+            logger.warning(f"Failed to set frequency region: {e}")
 
     def _set_antenna(self, ant_id: int):
         """Select active antenna on the RFID reader.
@@ -377,11 +412,12 @@ class RFIDReader:
         self,
         scan_passes: int = 3,
         pass_duration: float = 5.0,
-        cooldown: float = 0.3,
+        cooldown: float = 1.0,
         antennas: Optional[List[int]] = None,
         ant_repeat: int = 3,
         loop_count: Optional[int] = None,
-    ) -> List[str]:
+        return_details: bool = False,
+    ) -> Union[List[str], Dict[str, Any]]:
         """
         Inventory-optimized RFID scan with multi-antenna support.
 
@@ -396,9 +432,11 @@ class RFIDReader:
             cooldown: Delay between passes in seconds (default 0.3).
             antennas: List of antenna IDs (e.g. [0, 1]).
                       None or [0] uses single-antenna 0x8B mode.
+            return_details: If True, return dict with tags + per-pass info.
 
         Returns:
-            List of unique tags detected across all passes (sorted by freq)
+            List of unique tags, or dict with 'tags', 'pass_details',
+            'tag_counter' when return_details=True.
         """
         from collections import Counter
 
@@ -479,6 +517,12 @@ class RFIDReader:
         )
         logger.info(f"Tag detection counts: {dict(tag_counter)}")
 
+        if return_details:
+            return {
+                'tags': sorted_tags,
+                'pass_details': pass_details,
+                'tag_counter': dict(tag_counter),
+            }
         return sorted_tags
 
     def _fast_switch_ant_scan(
@@ -536,16 +580,19 @@ class RFIDReader:
             loop_count = max(10, int(scan_duration / max(est_time_per_loop, 0.1)))
         loop_count = min(loop_count, 0xFF)  # Protocol limit: 1 byte
 
-        # Build antenna config (4 slots, unused = 0x04)
+        # Build antenna config (4 slots, unused = 0x04 with repeat=0x00)
+        # Per protocol manual: antenna ID > 3 means "skip". Unused slots MUST
+        # have repeat=0x00, otherwise the reader misparses subsequent bytes
+        # causing parameter_invalid (0x41) or chaotic polling behavior.
         ant_slots = list(antennas[:4])
         while len(ant_slots) < 4:
-            ant_slots.append(0x04)  # skip
+            ant_slots.append(0x04)  # skip marker
 
         data = bytes([
-            ant_slots[0], ant_repeat,
-            ant_slots[1], ant_repeat,
-            ant_slots[2], ant_repeat,
-            ant_slots[3], ant_repeat,
+            ant_slots[0], ant_repeat if ant_slots[0] != 0x04 else 0x00,
+            ant_slots[1], ant_repeat if ant_slots[1] != 0x04 else 0x00,
+            ant_slots[2], ant_repeat if ant_slots[2] != 0x04 else 0x00,
+            ant_slots[3], ant_repeat if ant_slots[3] != 0x04 else 0x00,
             rest_time & 0xFF,
             loop_count & 0xFF,
         ])
@@ -1331,7 +1378,8 @@ class RaspberryPiHardware(HardwareInterface):
         antennas: Optional[List[int]] = None,
         ant_repeat: int = 3,
         loop_count: Optional[int] = None,
-    ) -> List[str]:
+        return_details: bool = False,
+    ) -> Union[List[str], Dict[str, Any]]:
         """
         Inventory-optimized RFID scan for stable counting.
 
@@ -1344,12 +1392,13 @@ class RaspberryPiHardware(HardwareInterface):
             antennas: List of antenna IDs to cycle through
             ant_repeat: Inventory rounds per antenna per loop (0x8A)
             loop_count: Number of loops for fast-switch command (None = auto)
+            return_details: If True, return dict with per-pass info
 
         Returns:
-            List of unique tags detected across all passes
+            List of unique tags, or dict with details when return_details=True
         """
         if not self._rfid_reader:
-            return []
+            return [] if not return_details else {'tags': [], 'pass_details': [], 'tag_counter': {}}
 
         return self._rfid_reader.read_rfid_tags_inventory(
             scan_passes=scan_passes,
@@ -1357,6 +1406,7 @@ class RaspberryPiHardware(HardwareInterface):
             antennas=antennas,
             ant_repeat=ant_repeat,
             loop_count=loop_count,
+            return_details=return_details,
         )
 
     def unlock_drawer(self, drawer_id: int) -> bool:

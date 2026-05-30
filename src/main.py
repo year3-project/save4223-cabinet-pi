@@ -127,13 +127,13 @@ class SmartCabinet:
         # Start sync worker
         self.sync_worker.start()
 
-        # Initial sync
+        # Initial sync (server data only, RFID not initialized yet)
         self._initial_sync()
 
         logger.info("Smart Cabinet initialized successfully")
 
     def _initial_sync(self):
-        """Perform initial sync on startup."""
+        """Perform initial sync on startup (server cache only)."""
         logger.info("Performing initial sync...")
         try:
             if self.api.health_check():
@@ -143,6 +143,56 @@ class SmartCabinet:
                 logger.warning("Server unavailable, operating in offline mode")
         except Exception as e:
             logger.warning(f"Initial sync failed: {e}, operating in offline mode")
+
+    def _reconcile(self):
+        """Scan RFID, reconcile local DB, sync with server."""
+        logger.info("Performing inventory reconciliation...")
+        try:
+            scanned_tags = self._scan_rfid()
+            if not scanned_tags:
+                logger.warning("Reconciliation scan found no tags, skipping")
+                return
+
+            cabinet_id = CONFIG.get('cabinet_id', 1)
+            result = self.local_db.reconcile_inventory(scanned_tags, cabinet_id)
+
+            logger.info(
+                f"Reconciliation: {result['total_scanned']} scanned, "
+                f"{len(result['missing'])} missing, {len(result['recovered'])} recovered"
+            )
+
+            if result['missing'] or result['recovered']:
+                for item in result['missing']:
+                    logger.warning(f"  MISSING: {item['name']} ({item['rfid_tag']})")
+                for item in result['recovered']:
+                    logger.info(f"  RECOVERED: {item['name']} ({item['rfid_tag']})")
+
+                # Attempt to sync reconciliation with server
+                try:
+                    self.api.reconcile(
+                        cabinet_id=cabinet_id,
+                        scanned_tags=scanned_tags,
+                        missing_items=result['missing'],
+                        recovered_items=result['recovered'],
+                    )
+                    logger.info("Reconciliation synced to server")
+                except Exception as e:
+                    logger.warning(f"Reconciliation sync failed: {e}, queued for retry")
+                    self.local_db.queue_offline_action(
+                        'reconciliation',
+                        {
+                            'cabinet_id': cabinet_id,
+                            'scanned_tags': scanned_tags,
+                            'missing_items': result['missing'],
+                            'recovered_items': result['recovered'],
+                        },
+                        priority=3,
+                    )
+            else:
+                logger.info("Inventory matches expected state")
+
+        except Exception as e:
+            logger.error(f"Reconciliation failed: {e}")
 
     def _setup_signal_handlers(self):
         """Setup graceful shutdown handlers."""
@@ -810,7 +860,6 @@ class SmartCabinet:
         )
         logger.info(f"RFID inventory scan complete: {len(result)} unique tags detected")
         return result
-        return result
 
     # =================================================================================
     # Main Loop
@@ -824,8 +873,15 @@ class SmartCabinet:
         # Initialize hardware
         self.hardware.initialize()
 
+        # Startup reconciliation (now that RFID hardware is ready)
+        self._reconcile()
+
         # Initial state
         self.state_machine.transition(SystemState.LOCKED)
+
+        # Periodic reconciliation timer
+        last_reconciliation = time.time()
+        reconciliation_interval = 3600  # 1 hour
 
         try:
             while self.running:
@@ -833,6 +889,12 @@ class SmartCabinet:
 
                 if state == SystemState.LOCKED:
                     self._handle_locked()
+
+                    # Periodic reconciliation (only in LOCKED state when idle)
+                    if time.time() - last_reconciliation >= reconciliation_interval:
+                        logger.info("Hourly reconciliation triggered")
+                        self._reconcile()
+                        last_reconciliation = time.time()
                 elif state == SystemState.AUTHENTICATING:
                     pass  # Handled by on_enter
                 elif state == SystemState.UNLOCKED:
