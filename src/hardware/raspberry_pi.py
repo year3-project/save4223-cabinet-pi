@@ -417,13 +417,16 @@ class RFIDReader:
         ant_repeat: int = 3,
         loop_count: Optional[int] = None,
         return_details: bool = False,
+        sessions: Optional[List[int]] = None,
     ) -> Union[List[str], Dict[str, Any]]:
         """
         Inventory-optimized RFID scan with multi-antenna support.
 
-        Uses the 0x8A fast-switch-antenna inventory command when multiple
-        antennas are configured.  Falls back to standard 0x8B for single
-        antenna setups.
+        When `sessions` lists more than one Gen2 session, delegates to the
+        multi-session union scan (cycles S0..S3 to catch tags hiding in one
+        session's already-inventoried state). Otherwise uses the 0x8A
+        fast-switch command for multiple antennas, or standard 0x8B for a
+        single antenna.
 
         Args:
             scan_passes: Number of scan passes (default 3).
@@ -442,6 +445,17 @@ class RFIDReader:
 
         if not antennas:
             antennas = [0x00]
+
+        # Multi-session union mode (config-driven): cycle Gen2 sessions to recover
+        # tags that hide in one session's already-inventoried (B) state. Opt-in by
+        # setting >1 session in config['rfid_inventory']['sessions'].
+        if sessions and len(sessions) > 1:
+            return self.read_rfid_tags_multisession(
+                sessions=sessions,
+                antennas=antennas,
+                duration_per_combo=pass_duration,
+                return_details=return_details,
+            )
 
         multi_ant = len(antennas) > 1
         all_tags = set()
@@ -891,8 +905,154 @@ class RFIDReader:
         finally:
             self.reading = False
             self.disconnect()
-            
-            
+
+    def _scan_session_antenna(
+        self,
+        session: int,
+        antenna: Optional[int],
+        duration: float,
+        toggle_target: bool = True,
+    ) -> 'Counter':
+        """One 0x8B inventory scan pinned to a fixed Gen2 session (already connected).
+
+        Mirrors the proven test_rfid_params technique: per cycle send 0x8B with the
+        given session, toggle Target A/B, accumulate per-cycle detections. Returns a
+        Counter of EPC -> number of cycles it was seen in. Assumes self.socket is open.
+        """
+        from collections import Counter
+
+        tag_count: 'Counter' = Counter()
+        repeat = 0x01
+
+        if antenna is not None:
+            self._set_antenna(antenna)
+            time.sleep(0.05)
+
+        self._recv_buffer.clear()
+        start_time = time.time()
+        cycle = 0
+
+        while (time.time() - start_time) < duration:
+            target = 0x00 if (not toggle_target or cycle % 2 == 0) else 0x01
+            cmd_payload = bytes([session & 0x03, target, repeat])
+
+            self.work_mode_tags.clear()
+            try:
+                self.socket.sendall(self._build_packet(0x8B, cmd_payload))
+            except Exception as e:
+                logger.error(f"Multi-session send error: {e}")
+                break
+
+            cycle_start = time.time()
+            last_data_time = cycle_start
+            while (time.time() - cycle_start) < self._max_cycle_wait:
+                try:
+                    self.socket.settimeout(0.1)
+                    data = self.socket.recv(4096)
+                    if data:
+                        last_data_time = time.time()
+                        self._recv_buffer.extend(data)
+                        self._extract_frames_from_buffer()
+                    else:
+                        if (time.time() - last_data_time) > 0.3:
+                            break
+                except socket.timeout:
+                    if (time.time() - last_data_time) > 0.3:
+                        break
+                except Exception as e:
+                    logger.error(f"Multi-session recv error: {e}")
+                    break
+
+            for tag in self.work_mode_tags:
+                tag_count[tag] += 1
+            cycle += 1
+            time.sleep(0.3)
+
+        # Drain any remaining buffered frames from the last cycle
+        if self._recv_buffer:
+            self._extract_frames_from_buffer()
+            for tag in self.work_mode_tags:
+                tag_count[tag] += 1
+
+        return tag_count
+
+    def read_rfid_tags_multisession(
+        self,
+        sessions: Optional[List[int]] = None,
+        antennas: Optional[List[int]] = None,
+        duration_per_combo: float = 2.0,
+        return_details: bool = False,
+    ) -> Union[List[str], Dict[str, Any]]:
+        """Union-scan across Gen2 sessions (and antennas) to break the single-session ceiling.
+
+        A single Gen2 session plateaus in this cabinet (~35/39 tags): once a tag is
+        inventoried its session flag flips to B and it goes quiet, so collision-prone
+        / shadowed tags never get re-counted. Cycling S0->S3 gives each tag independent
+        chances to respond in a session where it is still 'fresh'. Connects once, loops
+        session x antenna with the proven per-session 0x8B technique, unions the results.
+
+        Total scan time ~= len(sessions) * len(antennas) * duration_per_combo.
+
+        Args:
+            sessions: Gen2 sessions to cycle (default [0,1,2,3] = S0..S3).
+            antennas: Antenna IDs to cycle (default [0x00]). Note: in this cabinet
+                      antenna 1's tags are a subset of antenna 0, so [0] is usually enough.
+            duration_per_combo: Seconds to scan each (session, antenna) pair.
+            return_details: If True, return dict with per-combo breakdown.
+        """
+        from collections import Counter
+
+        if not sessions:
+            sessions = [0x00, 0x01, 0x02, 0x03]
+        if not antennas:
+            antennas = [0x00]
+
+        all_tags = set()
+        tag_counter: 'Counter' = Counter()
+        combo_details = []
+        est_total = len(sessions) * len(antennas) * duration_per_combo
+
+        logger.info(
+            "Multi-session inventory: sessions=%s, antennas=%s, %.1fs/combo (~%.0fs total)",
+            [f"S{s}" for s in sessions],
+            [f"0x{a:02X}" for a in antennas],
+            duration_per_combo,
+            est_total,
+        )
+
+        if not self.connect():
+            return [] if not return_details else {'tags': [], 'tag_counter': {}, 'combo_details': []}
+
+        try:
+            for session in sessions:
+                for ant in antennas:
+                    before = len(all_tags)
+                    # Only switch antenna when more than one is configured.
+                    tc = self._scan_session_antenna(
+                        session,
+                        ant if len(antennas) > 1 else None,
+                        duration_per_combo,
+                    )
+                    all_tags.update(tc.keys())
+                    tag_counter.update(tc)
+                    new = len(all_tags) - before
+                    combo_details.append({'session': session, 'antenna': ant,
+                                          'tags': len(tc), 'new': new})
+                    logger.info(
+                        "  S%s ant=0x%02X: %d tags, +%d new (total %d)",
+                        session, ant, len(tc), new, len(all_tags),
+                    )
+        finally:
+            self.disconnect()
+
+        sorted_tags = sorted(all_tags, key=lambda t: tag_counter[t], reverse=True)
+        logger.info("Multi-session complete: %d unique tags", len(sorted_tags))
+
+        if return_details:
+            return {'tags': sorted_tags, 'tag_counter': dict(tag_counter),
+                    'combo_details': combo_details}
+        return sorted_tags
+
     def _receive_and_process(self):
         """Receive and process RFID data."""
         start_time = time.time()
@@ -1038,10 +1198,14 @@ class RFIDReader:
 
         logger.debug(f"Parsing frame: addr=0x{addr:02X}, cmd=0x{cmd:02X}, data_len={data_len}")
 
-        if cmd == 0x8B:
-            self._parse_tag_data_bytes(data)
-        elif cmd == 0x8A:
-            # 0x8A = fast switch antenna inventory response (contains tag data)
+        if cmd in (0x8B, 0x8A):
+            # A real tag record is always EVEN length: freq(1)+PC(2)+EPC(2*words)+RSSI(1).
+            # The end-of-inventory status frame (AntID + ReadRate + TotalRead = 7 bytes)
+            # is ODD, so any odd-length payload is a status frame, not tag data. Skip it
+            # instead of decoding garbage / phantom tags into work_mode_tags.
+            if data_len % 2 != 0:
+                logger.debug(f"Inventory status frame (cmd=0x{cmd:02X}, {data_len}B) - not tag data")
+                return
             self._parse_tag_data_bytes(data)
         else:
             logger.debug(f"Unknown command: 0x{cmd:02X}")
@@ -1086,10 +1250,12 @@ class RFIDReader:
             pos += 1
 
             epc_hex = epc_data.hex().upper()
-            rssi_dbm = rssi_byte - 129 if rssi_byte < 129 else rssi_byte - 129
+            # RSSI is a single byte; subtract the reader's 129 offset to get dBm.
+            # (Previously this was a no-op ternary - both branches were identical.)
+            rssi_dbm = rssi_byte - 129
             if self._validate_epc(epc_hex) and epc_hex not in IGNORED_TAGS:
                 self.work_mode_tags.add(epc_hex)
-                logger.debug(f"Tag: EPC={epc_hex}, RSSI={rssi_dbm}dBm")
+                logger.debug(f"Tag: EPC={epc_hex}, RSSI={rssi_dbm}dBm (raw=0x{rssi_byte:02X})")
                 if self._tag_callback:
                     self._tag_callback(epc_hex)
 
@@ -1379,12 +1545,15 @@ class RaspberryPiHardware(HardwareInterface):
         ant_repeat: int = 3,
         loop_count: Optional[int] = None,
         return_details: bool = False,
+        sessions: Optional[List[int]] = None,
     ) -> Union[List[str], Dict[str, Any]]:
         """
         Inventory-optimized RFID scan for stable counting.
 
         Performs multiple scan passes across configured antennas and returns
-        union of all detected tags.
+        union of all detected tags. When `sessions` has >1 entry, performs a
+        multi-session union scan (S0..S3) to recover tags hiding in one
+        session's already-inventoried state.
 
         Args:
             scan_passes: Number of scan passes (default 3)
@@ -1393,6 +1562,7 @@ class RaspberryPiHardware(HardwareInterface):
             ant_repeat: Inventory rounds per antenna per loop (0x8A)
             loop_count: Number of loops for fast-switch command (None = auto)
             return_details: If True, return dict with per-pass info
+            sessions: Gen2 sessions to cycle (e.g. [0,1,2,3]); >1 enables multi-session
 
         Returns:
             List of unique tags, or dict with details when return_details=True
@@ -1406,6 +1576,7 @@ class RaspberryPiHardware(HardwareInterface):
             antennas=antennas,
             ant_repeat=ant_repeat,
             loop_count=loop_count,
+            sessions=sessions,
             return_details=return_details,
         )
 
