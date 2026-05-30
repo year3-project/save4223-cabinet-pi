@@ -122,3 +122,40 @@ with the multi-session scan. (Easy to add to `test_rfid_params.py`.)
 - `src/hardware/raspberry_pi.py` — 2 decode fixes + multi-session methods
 - `src/main.py` — pass `sessions` from config
 - `config.json` — `sessions` knob + guidance
+
+---
+
+## Addendum: verified against the manual (V4.1.7) + round-2 fixes
+
+Cross-checked every claim against `UHF RFID读写器通讯协议用户手册_V4.1.7.pdf`:
+
+| Item | Manual | Verdict |
+|---|---|---|
+| Checksum | p.42 C-code: `uSum=Σall; (~uSum)+1`; "除校验和本身外所有字节" includes 0xA0 | code **correct** — do NOT exclude 0xA0 |
+| `Len` | "Len 后面开始的字节数" = data+3 | correct |
+| Tag frame 0x8B/0x8A | `FreqAnt(1) PC(2) EPC(N) RSSI(1)` | decoder correct |
+| RSSI | table: `0x62=-31dBm`, 1:1 step → `byte-129` | correct |
+| **0x8A end frame** | `Len=0x0A` → `TotalRead(3)+CommandDuration(4)` = **7 bytes (odd)** | **this is the `0000` phantom source** |
+
+**Key correction:** the `0000` phantom comes from the **0x8A end frame**, whose
+payload is 7 bytes — **odd** — so the odd-length guard added above **does fix it**
+(verified: a crafted `0x8A` end frame now yields no tag). The `IGNORED_TAGS`
+`"0000"` blacklist is now redundant. All status/end frames are either odd
+(guarded) or <6 bytes (can't form a tag), so **status-frame false reads are fully
+covered**.
+
+**Round-2 fixes (this commit):**
+- **#7 missed reads** — `_idle_break_timeout` default `2.0 → 0.3`s (a 2s idle wait
+  per cycle was starving scan rounds) and continuous-scan `repeat 0x01 → 0x0A`
+  (more anti-collision rounds per command).
+- **#8 fd leak** — `connect()` now closes any prior socket first (the single-antenna
+  path connected twice and orphaned the first socket every scan).
+- **#A Flash wear** — power/frequency are written to the reader's Flash and persist
+  across power-off; `_init_reader()` now runs **once per process** (`_reader_configured`)
+  instead of on every connect (0x76 takes >100ms and wears Flash).
+
+**Latent risks noted (not bugs today):**
+- Enabling **Phase** adds 2 bytes/tag to the frame; the decoder doesn't handle it
+  → would misparse. Don't enable Phase without updating `_parse_tag_data_bytes`.
+- The 0x8A **short** command (used here, `Len=0x0D`) cannot set session/target; it
+  uses the reader default. Multi-session uses 0x8B (correct), not 0x8A.

@@ -260,20 +260,36 @@ class RFIDReader:
         self.current_cycle = 0
         self.work_mode_cycles = RFID_READ_CYCLES
         self._recv_buffer = bytearray()
-        self._idle_break_timeout = 2.0
+        self._idle_break_timeout = 0.3  # was 2.0 - 2s idle wait per cycle starved scan rounds
         self._max_cycle_wait = 2.0
         self._tag_callback = None  # Optional callback for tag detection
+        self._reader_configured = False  # set power/freq only once (persists in reader Flash)
 
     def connect(self) -> bool:
-        """Connect to RFID reader with antenna and power initialization."""
+        """Connect to RFID reader; configure power/frequency once (settings persist in Flash)."""
         try:
+            # Close any prior socket first so repeated scans don't leak fds.
+            # read_rfid_tags_inventory() and read_rfid_tags_continuous() both call
+            # connect(); without this the first socket was orphaned each scan.
+            if self.socket:
+                try:
+                    self.socket.close()
+                except Exception:
+                    pass
+                self.socket = None
+
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.socket.settimeout(5)
             self.socket.connect((self.host, self.port))
             self.connected = True
             logger.info(f"RFID reader connected to {self.host}:{self.port}")
 
-            self._init_reader()
+            # Power (0x76) and frequency (0x78) are written to the reader's Flash and
+            # survive power-off; 0x76 alone takes >100ms. Configure only once per
+            # process instead of on every scan (avoids Flash wear + latency).
+            if not self._reader_configured:
+                self._init_reader()
+                self._reader_configured = True
 
             return True
         except Exception as e:
@@ -349,7 +365,9 @@ class RFIDReader:
             logger.warning(f"Failed to set antenna {ant_id}: {e}")
 
     def _checksum(self, data: bytes) -> int:
-        """Calculate checksum per ZTX-RM702 manual: sum from Len byte, exclude 0xA0 header."""
+        """Checksum per manual V4.1.7 p.42: two's complement of the sum of ALL bytes
+        except the checksum itself - this INCLUDES the 0xA0 header. Do not change to
+        exclude 0xA0 (would reject every frame)."""
         total = sum(b & 0xFF for b in data) & 0xFF
         return ((~total) + 1) & 0xFF
 
@@ -824,7 +842,7 @@ class RFIDReader:
 
         try:
             session = 0x01
-            repeat = 0x01
+            repeat = 0x0A  # was 0x01 - more anti-collision rounds per command = fewer misses
             start_time = time.time()
             cycle = 0
             interval = 0.3  # Shorter interval for more cycles in same time
