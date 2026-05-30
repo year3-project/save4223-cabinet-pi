@@ -43,10 +43,23 @@ LED_CHANNEL = 0      # set to '1' for GPIOs 13, 19, 41, 45 or 53
 # RFID configuration
 RFID_HOST = '192.168.0.178'
 RFID_PORT = 4001
-RFID_READ_CYCLES = 5
-RFID_READ_INTERVAL = 0.5
 RFID_ADDRESS = 0xFF
 IGNORED_TAGS = {"00B07A15306008EFF68E8F54"}
+
+# --- RFID acquisition tuning (sweep these to fix missed reads) ---
+# Reader is an Impinj R2000-class module; inventory uses the "Customized
+# Session/Target Inventory" command (0x8B). Missed reads are almost always an
+# *acquisition* problem (power / rounds / session) rather than a decode bug -
+# the frame decoder below is correct for well-formed frames. Tune here:
+RFID_READ_CYCLES = 8          # outer loop: inventory commands sent per scan (was 5)
+RFID_READ_INTERVAL = 0.2      # seconds between commands (was 0.5)
+RFID_SESSION = 0x01           # S0=0, S1=1, S2=2, S3=3
+RFID_TARGET = 0x00            # starting target: 0=A, 1=B
+RFID_ALTERNATE_TARGET = True  # flip A<->B each cycle (anti-starvation in dense trays)
+RFID_REPEAT = 0x1E            # anti-collision rounds PER command (was 0x01 - main miss source)
+RFID_RF_POWER = 30            # dBm, 0..33; higher = more range/sensitivity (raise to cut misses)
+RFID_WORK_ANTENNA = 0         # 0..3
+RFID_CONFIGURE_ON_CONNECT = True  # send power+antenna before each scan (set False if reader NAKs)
 
 # NFC/QR configuration
 NFC_BAUD_RATE = 115200
@@ -185,8 +198,9 @@ class RFIDReader:
         self.current_cycle = 0
         self.work_mode_cycles = RFID_READ_CYCLES
         self._recv_buffer = bytearray()
-        self._idle_break_timeout = 0.2
-        self._max_cycle_wait = 2.0
+        self._idle_break_timeout = 0.3
+        self._max_cycle_wait = 3.0
+        self._inventory_done = False
 
     def connect(self) -> bool:
         """Connect to RFID reader."""
@@ -216,37 +230,92 @@ class RFIDReader:
         cs = self._checksum(packet_wo_checksum)
         return packet_wo_checksum + bytes([cs])
 
+    def _send(self, packet: bytes):
+        """Send a raw protocol packet."""
+        if self.socket:
+            self.socket.sendall(packet)
+
+    def _drain(self, seconds: float):
+        """Read and discard reader output for a short window, then clear buffer.
+
+        Used to swallow command-ack frames (0x74/0x76) so they don't leak into
+        the tag parser, and to flush any stale bytes before inventory starts.
+        """
+        if not self.socket:
+            return
+        end = time.time() + seconds
+        self.socket.settimeout(0.1)
+        while time.time() < end:
+            try:
+                if not self.socket.recv(4096):
+                    break
+            except socket.timeout:
+                break
+            except Exception:
+                break
+        self._recv_buffer = bytearray()
+
+    def _configure_reader(self):
+        """Set work antenna + RF output power before inventory (best-effort).
+
+        If the reader firmware rejects these (NAK), we log and fall back to its
+        persisted settings - set RFID_CONFIGURE_ON_CONNECT=False to skip entirely.
+        """
+        try:
+            antenna = RFID_WORK_ANTENNA & 0x03
+            power = max(0, min(33, RFID_RF_POWER))
+            self._send(self._build_packet(0x74, bytes([antenna])))  # set work antenna
+            time.sleep(0.05)
+            self._send(self._build_packet(0x76, bytes([power & 0xFF])))  # set RF power (dBm)
+            time.sleep(0.05)
+            self._drain(0.2)  # consume ack frames so they don't pollute tag parsing
+            logger.info(f"RFID configured: antenna={antenna}, power={power} dBm")
+        except Exception as e:
+            logger.warning(f"RFID configure failed, using reader defaults: {e}")
+
     def read_rfid_tags_multiple(self) -> List[str]:
         """Read RFID tags multiple times (work mode)."""
         if not self.connect():
             return []
 
         self.work_mode_tags.clear()
+        self._recv_buffer = bytearray()  # don't carry stale bytes between scans
         self.current_cycle = 0
         self.reading = True
 
-        logger.info(f"Starting RFID inventory - {self.work_mode_cycles} cycles")
+        logger.info(
+            f"RFID inventory: cycles={self.work_mode_cycles} S{RFID_SESSION} "
+            f"repeat={RFID_REPEAT} power={RFID_RF_POWER}dBm ant={RFID_WORK_ANTENNA} "
+            f"alt_target={RFID_ALTERNATE_TARGET}"
+        )
 
         try:
-            session = 0x01
-            target = 0x00
-            repeat = 0x01
-            cmd_payload = bytes([session, target, repeat])
+            if RFID_CONFIGURE_ON_CONNECT:
+                self._configure_reader()
+
+            session = RFID_SESSION & 0x03
+            target = RFID_TARGET & 0x01
+            repeat = RFID_REPEAT & 0xFF
 
             while self.reading and self.current_cycle < self.work_mode_cycles:
                 before_cycle = set(self.work_mode_tags)
 
-                packet = self._build_packet(0x8B, cmd_payload)
-                if self.socket:
-                    self.socket.sendall(packet)
+                # Alternate A<->B on odd cycles so tags that flipped to the other
+                # inventoried flag still get read (prevents starvation in S1/S2/S3).
+                cur_target = target
+                if RFID_ALTERNATE_TARGET and (self.current_cycle % 2 == 1):
+                    cur_target ^= 0x01
 
+                self._inventory_done = False
+                self._send(self._build_packet(0x8B, bytes([session, cur_target, repeat])))
                 self._receive_and_process()
 
-                after_cycle = self.work_mode_tags
-                new_tags = after_cycle - before_cycle
-
-                if new_tags:
-                    logger.debug(f"[Cycle {self.current_cycle+1}] New tags: {list(new_tags)}")
+                new_tags = self.work_mode_tags - before_cycle
+                logger.debug(
+                    f"[cycle {self.current_cycle+1}/{self.work_mode_cycles} "
+                    f"T={'A' if cur_target == 0 else 'B'}] "
+                    f"+{len(new_tags)} new, {len(self.work_mode_tags)} total"
+                )
 
                 self.current_cycle += 1
                 time.sleep(RFID_READ_INTERVAL)
@@ -256,8 +325,9 @@ class RFIDReader:
             return tags_list
 
         except Exception as e:
+            # Return what we already captured rather than dropping the whole scan.
             logger.error(f"RFID read error: {e}")
-            return []
+            return list(self.work_mode_tags)
         finally:
             self.stop_reading()
             self.disconnect()
@@ -268,6 +338,8 @@ class RFIDReader:
         last_data_time = time.time()
 
         while self.reading and (time.time() - start_time) < self._max_cycle_wait:
+            if self._inventory_done:  # reader sent end-of-inventory status frame
+                break
             try:
                 self.socket.settimeout(0.1)
                 data = self.socket.recv(4096)
@@ -275,6 +347,8 @@ class RFIDReader:
                     last_data_time = time.time()
                     self._recv_buffer.extend(data)
                     self._extract_frames_from_buffer()
+                    if self._inventory_done:
+                        break
                 else:
                     if (time.time() - last_data_time) > self._idle_break_timeout:
                         break
@@ -329,7 +403,21 @@ class RFIDReader:
         data = frame[4:4 + data_len] if data_len > 0 else b''
 
         if cmd == 0x8B:
+            # End-of-inventory status frame is AntID(1)+ReadRate(2)+TotalRead(4)=7 bytes.
+            # Valid tag data is always even (1 freq + 2 PC + 2*words EPC + 1 RSSI),
+            # so any odd/<=7 payload is the status frame, never a tag - using it to
+            # end the cycle early instead of misreading it as a phantom tag.
+            if data_len == 7 or data_len % 2 != 0:
+                self._inventory_done = True
+                if data_len == 7:
+                    read_rate = (data[1] << 8) | data[2]
+                    total = int.from_bytes(data[3:7], 'big')
+                    logger.debug(f"Inventory round end: rate={read_rate}, total_reads={total}")
+                return
             self._parse_tag_data_bytes(data)
+        elif cmd in (0x74, 0x76):
+            # Work-antenna / RF-power command acknowledgements; nothing to extract.
+            logger.debug(f"RFID config ack cmd=0x{cmd:02X} data={data.hex()}")
 
     def _parse_tag_data_bytes(self, data: bytes):
         """Parse tag data from frame."""
@@ -364,6 +452,9 @@ class RFIDReader:
 
             epc_hex = epc_data.hex().upper()
             if self._validate_epc(epc_hex) and epc_hex not in IGNORED_TAGS:
+                if epc_hex not in self.work_mode_tags:
+                    # RSSI is reported as a raw byte; lower bytes = weaker signal.
+                    logger.debug(f"Tag {epc_hex} ant={antenna} rssi={rssi_byte}")
                 self.work_mode_tags.add(epc_hex)
 
     def _validate_epc(self, epc_hex: str) -> bool:
