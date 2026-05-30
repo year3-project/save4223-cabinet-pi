@@ -10,7 +10,7 @@ import logging
 import threading
 import socket
 import glob
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union
 from pathlib import Path
 
 try:
@@ -23,6 +23,7 @@ except ImportError as e:
     logging.warning(f"RPi libraries not available ({e}) - running in simulation mode")
 
 from .base import HardwareInterface, DrawerState, LEDColor
+from .hidraw_reader import HIDRawReader
 
 logger = logging.getLogger(__name__)
 
@@ -46,14 +47,14 @@ RFID_PORT = 4001
 RFID_READ_CYCLES = 8
 RFID_READ_INTERVAL = 1.0
 RFID_ADDRESS = 0xFF
-IGNORED_TAGS = {"00B07A15306008EFF68E8F54"}
+IGNORED_TAGS = {"00B07A15306008EFF68E8F54", "0000"}
 
 # NFC/QR configuration
 NFC_BAUD_RATE = 115200
 
 
 class NFCQRReader:
-    """USB NFC/QR code reader."""
+    """USB NFC/QR code reader with improved format detection."""
 
     def __init__(self):
         self.ser = None
@@ -113,12 +114,12 @@ class NFCQRReader:
         return self.ser is not None and self.ser.is_open
 
     def read_nfc_card(self) -> Optional[str]:
-        """Read NFC card UID."""
+        """Read NFC card UID from serial device."""
         if not self.ser or not self.ser.is_open:
             return None
 
         try:
-            # Command to read UID
+            # Command to read UID (ISO14443A)
             read_uid_command = bytes([
                 0x0E, 0x01, 0x26, 0x01, 0x00, 0x01, 0x0A,
                 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xC4
@@ -144,7 +145,7 @@ class NFCQRReader:
                             if status == 0x00 and response_len == 25:
                                 uid = response[4:8]
                                 uid_decimal = str(int.from_bytes(uid, byteorder='big'))
-                                logger.info(f"NFC card detected: {uid_decimal}")
+                                logger.info(f"NFC card detected (serial): {uid_decimal}")
                                 return uid_decimal
             return None
 
@@ -153,18 +154,92 @@ class NFCQRReader:
             return None
 
     def read_qr_code(self) -> Optional[str]:
-        """Read QR code."""
+        """Read QR code from serial device."""
         try:
             if self.ser and self.ser.in_waiting > 0:
-                self.ser.reset_input_buffer()
                 qr_data = self.ser.readline().decode('utf-8', errors='ignore').strip()
                 if qr_data and len(qr_data) > 0:
-                    logger.info(f"QR code detected: {qr_data}")
+                    logger.info(f"QR code detected (serial): {qr_data}")
                     return qr_data
             return None
         except Exception as e:
             logger.error(f"QR read error: {e}")
             return None
+
+    def read_card(self) -> Optional[Dict[str, str]]:
+        """
+        Unified card reading method with format detection.
+
+        Returns:
+            Dict with 'type' ('nfc' or 'qr') and 'data' keys,
+            or None if no card read
+        """
+        if not self.ser or not self.ser.is_open:
+            return None
+
+        try:
+            # First try reading as NFC (using command)
+            nfc_uid = self.read_nfc_card()
+            if nfc_uid:
+                return {'type': 'nfc', 'data': nfc_uid}
+
+            # Then try reading as QR (line-based)
+            qr_data = self.read_qr_code()
+            if qr_data:
+                card_type = self._detect_card_type(qr_data)
+                return {'type': card_type, 'data': qr_data}
+
+            return None
+
+        except Exception as e:
+            logger.error(f"Card read error: {e}")
+            return None
+
+    @staticmethod
+    def _detect_card_type(data: str) -> str:
+        """
+        Detect whether data is from NFC card or QR code.
+
+        Returns:
+            'nfc' or 'qr'
+        """
+        if not data:
+            return 'qr'
+
+        cleaned = data.strip().upper()
+
+        # NFC UID patterns (typically 4-14 digit decimal, or hex)
+        # Pattern 1: Pure numeric, 4-14 digits (typical card UID in decimal)
+        if cleaned.isdigit() and 4 <= len(cleaned) <= 14:
+            return 'nfc'
+
+        # Pattern 2: Hex format with 8 chars (4-byte UID)
+        if len(cleaned) == 8 and all(c in '0123456789ABCDEF' for c in cleaned):
+            return 'nfc'
+
+        # Pattern 3: Short alphanumeric (5-10 chars) - could be NFC or short QR
+        # If it's mostly digits (>=70%), treat as NFC
+        if 5 <= len(cleaned) <= 10:
+            digit_count = sum(1 for c in cleaned if c.isdigit())
+            if digit_count / len(cleaned) >= 0.7:
+                return 'nfc'
+
+        # Everything else is likely QR (longer, mixed alphanumeric, JSON fragments, etc.)
+        return 'qr'
+
+    @staticmethod
+    def clean_hid_input(content: str) -> str:
+        """
+        Clean HID keyboard input by removing common noise patterns.
+
+        HID readers often inject noise characters between keystrokes.
+        Uses regex to keep only alphanumeric characters.
+        """
+        import re
+        if not content:
+            return ""
+        # Keep only letters and digits, discard all noise like 'M' or control chars
+        return re.sub(r'[^a-zA-Z0-9]', '', content)
 
     def close(self):
         """Close serial connection."""
@@ -185,82 +260,444 @@ class RFIDReader:
         self.current_cycle = 0
         self.work_mode_cycles = RFID_READ_CYCLES
         self._recv_buffer = bytearray()
-        self._idle_break_timeout = 0.2
+        self._idle_break_timeout = 0.3  # was 2.0 - 2s idle wait per cycle starved scan rounds
         self._max_cycle_wait = 2.0
+        self._tag_callback = None  # Optional callback for tag detection
+        self._reader_configured = False  # set power/freq only once (persists in reader Flash)
 
     def connect(self) -> bool:
-        """Connect to RFID reader."""
+        """Connect to RFID reader; configure power/frequency once (settings persist in Flash)."""
         try:
+            # Close any prior socket first so repeated scans don't leak fds.
+            # read_rfid_tags_inventory() and read_rfid_tags_continuous() both call
+            # connect(); without this the first socket was orphaned each scan.
+            if self.socket:
+                try:
+                    self.socket.close()
+                except Exception:
+                    pass
+                self.socket = None
+
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.socket.settimeout(5)
             self.socket.connect((self.host, self.port))
             self.connected = True
             logger.info(f"RFID reader connected to {self.host}:{self.port}")
+
+            # Power (0x76) and frequency (0x78) are written to the reader's Flash and
+            # survive power-off; 0x76 alone takes >100ms. Configure only once per
+            # process instead of on every scan (avoids Flash wear + latency).
+            if not self._reader_configured:
+                self._init_reader()
+                self._reader_configured = True
+
             return True
         except Exception as e:
             logger.error(f"RFID connection failed: {e}")
             self.connected = False
             return False
 
+    def _init_reader(self):
+        """Initialize reader settings for optimal tag detection."""
+        try:
+            # Set frequency region to max range (865-928MHz, custom spectrum)
+            self._set_frequency_region()
+            time.sleep(0.05)
+
+            # Set output power to 30dBm (0x1E) - stay below PA saturation limit
+            # 33dBm causes RX overload and self-jamming in metal cabinets
+            self._set_output_power(0x1E)
+            time.sleep(0.05)
+
+            logger.debug("RFID reader initialized (power=30dBm, freq=865-928MHz)")
+        except Exception as e:
+            logger.warning(f"RFID initialization warning: {e}")
+
+    def _set_frequency_region(self):
+        """Set frequency region to custom range (865-928MHz).
+
+        The reader hardware physically maxes out at 928MHz. Frequencies above
+        that cause PLL lock failures (0x52) and periodic read blind spots.
+
+        Command 0x78 (set frequency region), mode 2 (user defined):
+            Data: [mode] [start_freq_2] [start_freq_1] [start_freq_0]
+                  [freq_space] [freq_quantity_H] [freq_quantity_L]
+        """
+        try:
+            # 865000 KHz = 0x0D32E8, high byte first
+            start_freq = bytes([0x0D, 0x32, 0xE8])
+            freq_space = bytes([0x14])              # 20 -> 200 KHz interval
+            freq_quantity = bytes([0x01, 0x3C])     # 316 channels -> 865~928MHz
+
+            data = bytes([0x02]) + start_freq + freq_space + freq_quantity
+            packet = self._build_packet(0x78, data)
+            if self.socket:
+                self.socket.sendall(packet)
+                time.sleep(0.1)
+                self.socket.settimeout(0.5)
+                try:
+                    self.socket.recv(4096)
+                except socket.timeout:
+                    pass
+            logger.info("RFID frequency set to custom 865-928MHz (316 channels, 200KHz spacing)")
+        except Exception as e:
+            logger.warning(f"Failed to set frequency region: {e}")
+
+    def _set_antenna(self, ant_id: int):
+        """Select active antenna on the RFID reader.
+
+        Args:
+            ant_id: Antenna number (0x00=antenna 1, 0x01=antenna 2, 0xFF=all)
+        """
+        try:
+            packet = self._build_packet(0x74, bytes([ant_id & 0xFF]))
+            if self.socket:
+                self.socket.sendall(packet)
+                time.sleep(0.05)
+                # Read and discard response
+                self.socket.settimeout(0.3)
+                try:
+                    self.socket.recv(256)
+                except socket.timeout:
+                    pass
+            logger.debug(f"RFID antenna set to {ant_id} (0x{ant_id:02X})")
+        except Exception as e:
+            logger.warning(f"Failed to set antenna {ant_id}: {e}")
+
     def _checksum(self, data: bytes) -> int:
-        """Calculate checksum."""
-        uSum = 0
-        for byte in data:
-            uSum = (uSum + (byte & 0xFF)) & 0xFF
-        return ((~uSum) + 1) & 0xFF
+        """Checksum per manual V4.1.7 p.42: two's complement of the sum of ALL bytes
+        except the checksum itself - this INCLUDES the 0xA0 header. Do not change to
+        exclude 0xA0 (would reject every frame)."""
+        total = sum(b & 0xFF for b in data) & 0xFF
+        return ((~total) + 1) & 0xFF
 
     def _build_packet(self, cmd: int, data: bytes = b'') -> bytes:
-        """Build protocol packet."""
-        length = 1 + 1 + len(data) + 1
+        """Build protocol packet (compatible with master branch).
+
+        Frame format: [0xA0][Len][Addr][Cmd][Data...][Checksum]
+        - Len: Count of bytes AFTER Len (Addr + Cmd + Data + Checksum) = len(data) + 3
+        - Checksum: Hardware requires including 0xA0 header in calculation
+        """
+        length = len(data) + 3  # Addr(1) + Cmd(1) + Data(N) + Check(1)
+        # Build packet WITH 0xA0 for checksum calculation (master branch compatible)
         packet_wo_checksum = bytes([0xA0, length & 0xFF, RFID_ADDRESS & 0xFF, cmd & 0xFF]) + data
-        cs = self._checksum(packet_wo_checksum)
+        cs = self._checksum(packet_wo_checksum)  # Include 0xA0
         return packet_wo_checksum + bytes([cs])
 
+    def _set_output_power(self, power_dbm: int = 0x1A) -> bool:
+        """
+        Set RFID reader output power.
+
+        Args:
+            power_dbm: Power level in dBm (0x00-0x1E, max 30dBm)
+                       Recommended: 0x1A (26dBm) for 1m³ metal cabinet
+
+        Returns:
+            True if command was sent successfully
+        """
+        try:
+            # Command 0x76 = Set Output Power
+            # Data: [Power]
+            packet = self._build_packet(0x76, bytes([power_dbm & 0xFF]))
+            if self.socket:
+                self.socket.sendall(packet)
+                # Wait briefly for response
+                time.sleep(0.1)
+                # Read and discard response
+                self.socket.settimeout(0.5)
+                try:
+                    self.socket.recv(256)
+                except socket.timeout:
+                    pass
+                logger.info(f"RFID output power set to {power_dbm}dBm (0x{power_dbm:02X})")
+                return True
+        except Exception as e:
+            logger.warning(f"Failed to set RFID power: {e}")
+        return False
+
     def read_rfid_tags_multiple(self) -> List[str]:
-        """Read RFID tags multiple times (work mode)."""
+        """
+        Read RFID tags multiple times (work mode).
+
+        Delegates to continuous scan to avoid command flooding issues.
+        """
+        scan_duration = self.work_mode_cycles * RFID_READ_INTERVAL
+        logger.info(f"Starting RFID inventory - {scan_duration:.1f}s continuous scan")
+        result = self.read_rfid_tags_continuous(scan_duration=scan_duration)
+        return result['tags']
+
+    def read_rfid_tags_inventory(
+        self,
+        scan_passes: int = 3,
+        pass_duration: float = 5.0,
+        cooldown: float = 1.0,
+        antennas: Optional[List[int]] = None,
+        ant_repeat: int = 3,
+        loop_count: Optional[int] = None,
+        return_details: bool = False,
+        sessions: Optional[List[int]] = None,
+    ) -> Union[List[str], Dict[str, Any]]:
+        """
+        Inventory-optimized RFID scan with multi-antenna support.
+
+        When `sessions` lists more than one Gen2 session, delegates to the
+        multi-session union scan (cycles S0..S3 to catch tags hiding in one
+        session's already-inventoried state). Otherwise uses the 0x8A
+        fast-switch command for multiple antennas, or standard 0x8B for a
+        single antenna.
+
+        Args:
+            scan_passes: Number of scan passes (default 3).
+                         With dual antennas each pass covers both antennas.
+            pass_duration: Duration of each pass in seconds (default 5.0).
+            cooldown: Delay between passes in seconds (default 0.3).
+            antennas: List of antenna IDs (e.g. [0, 1]).
+                      None or [0] uses single-antenna 0x8B mode.
+            return_details: If True, return dict with tags + per-pass info.
+
+        Returns:
+            List of unique tags, or dict with 'tags', 'pass_details',
+            'tag_counter' when return_details=True.
+        """
+        from collections import Counter
+
+        if not antennas:
+            antennas = [0x00]
+
+        # Multi-session union mode (config-driven): cycle Gen2 sessions to recover
+        # tags that hide in one session's already-inventoried (B) state. Opt-in by
+        # setting >1 session in config['rfid_inventory']['sessions'].
+        if sessions and len(sessions) > 1:
+            return self.read_rfid_tags_multisession(
+                sessions=sessions,
+                antennas=antennas,
+                duration_per_combo=pass_duration,
+                return_details=return_details,
+            )
+
+        multi_ant = len(antennas) > 1
+        all_tags = set()
+        tag_counter = Counter()
+        pass_details = []
+
+        if multi_ant:
+            logger.info(
+                f"Starting fast-switch inventory: {scan_passes} passes x "
+                f"{pass_duration}s, antennas={[f'0x{a:02X}' for a in antennas]}, "
+                f"repeat={ant_repeat}, loops={loop_count}"
+            )
+        else:
+            logger.info(
+                f"Starting inventory scan: {scan_passes} passes x {pass_duration}s"
+            )
+
         if not self.connect():
             return []
 
-        self.work_mode_tags.clear()
-        self.current_cycle = 0
-        self.reading = True
-
-        logger.info(f"Starting RFID inventory - {self.work_mode_cycles} cycles")
+        # Drain power command response and let reader settle
+        time.sleep(0.5)
+        try:
+            self.socket.settimeout(0.2)
+            while True:
+                drain = self.socket.recv(4096)
+                if not drain:
+                    break
+        except (socket.timeout, Exception):
+            pass
 
         try:
-            session = 0x01
-            target = 0x00
-            repeat = 0x01
-            cmd_payload = bytes([session, target, repeat])
+            for pass_num in range(scan_passes):
+                if multi_ant:
+                    result = self._fast_switch_ant_scan(
+                        antennas=antennas,
+                        scan_duration=pass_duration,
+                        ant_repeat=ant_repeat,
+                        loop_count=loop_count,
+                    )
+                else:
+                    result = self.read_rfid_tags_continuous(
+                        scan_duration=pass_duration,
+                        toggle_target=True,
+                        idle_break_timeout=0.3,
+                    )
 
-            while self.reading and self.current_cycle < self.work_mode_cycles:
-                before_cycle = set(self.work_mode_tags)
+                pass_tags = set(result['tags'])
+                all_tags.update(pass_tags)
+                tag_counter.update(result['tag_count'])
+                pass_details.append(len(pass_tags))
 
-                packet = self._build_packet(0x8B, cmd_payload)
-                if self.socket:
-                    self.socket.sendall(packet)
+                logger.info(
+                    f"Pass {pass_num + 1}/{scan_passes}: {len(pass_tags)} tags "
+                    f"(cumulative: {len(all_tags)})"
+                )
 
-                self._receive_and_process()
+                if pass_num < scan_passes - 1:
+                    time.sleep(cooldown)
+        finally:
+            self.disconnect()
 
-                after_cycle = self.work_mode_tags
-                new_tags = after_cycle - before_cycle
+        # Sort by detection frequency (most reliable first)
+        sorted_tags = sorted(
+            all_tags,
+            key=lambda t: tag_counter[t],
+            reverse=True
+        )
 
-                if new_tags:
-                    logger.debug(f"[Cycle {self.current_cycle+1}] New tags: {list(new_tags)}")
+        logger.info(
+            f"Inventory complete: {len(sorted_tags)} unique tags from "
+            f"{scan_passes} passes {pass_details}"
+        )
+        logger.info(f"Tag detection counts: {dict(tag_counter)}")
 
-                self.current_cycle += 1
-                time.sleep(RFID_READ_INTERVAL)
+        if return_details:
+            return {
+                'tags': sorted_tags,
+                'pass_details': pass_details,
+                'tag_counter': dict(tag_counter),
+            }
+        return sorted_tags
 
-            tags_list = list(self.work_mode_tags)
-            logger.info(f"RFID inventory completed: {len(tags_list)} tags found")
-            return tags_list
+    def _fast_switch_ant_scan(
+        self,
+        antennas: List[int],
+        scan_duration: float = 8.0,
+        ant_repeat: int = 3,
+        rest_time: int = 0,
+        loop_count: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """
+        Fast-switch antenna inventory using command 0x8A (protocol V4.1.7).
+
+        Sends a single command that tells the reader to poll the specified
+        antennas in sequence.  The reader handles antenna switching internally.
+
+        Packet format for cmd 0x8A:
+            [ant_A_id] [ant_A_repeat] [ant_B_id] [ant_B_repeat]
+            [ant_C_id] [ant_C_repeat] [ant_D_id] [ant_D_repeat]
+            [rest_time_ms] [loop_count]
+
+        Antenna ID 0x04 = skip (don't poll that slot).
+
+        Args:
+            antennas: List of antenna IDs to poll (e.g. [0, 1])
+            scan_duration: Approximate total scan time in seconds
+            ant_repeat: Number of inventory rounds per antenna per loop (default 3)
+            rest_time: Milliseconds between antenna switches (default 0)
+
+        Returns:
+            Dict with 'tags', 'tag_count', etc.
+        """
+        from collections import defaultdict
+
+        tag_count: Dict[str, int] = defaultdict(int)
+        bytes_received = 0
+        frames_parsed = 0
+        self.work_mode_tags.clear()
+        self._recv_buffer.clear()
+
+        # Drain any leftover data from socket
+        try:
+            self.socket.settimeout(0.1)
+            while True:
+                drain = self.socket.recv(4096)
+                if not drain:
+                    break
+        except (socket.timeout, Exception):
+            pass
+        self._recv_buffer.clear()
+
+        # Loop count: use provided value or auto-compute
+        if loop_count is None:
+            est_time_per_loop = len(antennas) * ant_repeat * 0.3
+            loop_count = max(10, int(scan_duration / max(est_time_per_loop, 0.1)))
+        loop_count = min(loop_count, 0xFF)  # Protocol limit: 1 byte
+
+        # Build antenna config (4 slots, unused = 0x04 with repeat=0x00)
+        # Per protocol manual: antenna ID > 3 means "skip". Unused slots MUST
+        # have repeat=0x00, otherwise the reader misparses subsequent bytes
+        # causing parameter_invalid (0x41) or chaotic polling behavior.
+        ant_slots = list(antennas[:4])
+        while len(ant_slots) < 4:
+            ant_slots.append(0x04)  # skip marker
+
+        data = bytes([
+            ant_slots[0], ant_repeat if ant_slots[0] != 0x04 else 0x00,
+            ant_slots[1], ant_repeat if ant_slots[1] != 0x04 else 0x00,
+            ant_slots[2], ant_repeat if ant_slots[2] != 0x04 else 0x00,
+            ant_slots[3], ant_repeat if ant_slots[3] != 0x04 else 0x00,
+            rest_time & 0xFF,
+            loop_count & 0xFF,
+        ])
+
+        if not self.connected:
+            return {'tags': [], 'tag_count': {}, 'bytes_received': 0, 'frames_parsed': 0}
+
+        try:
+            packet = self._build_packet(0x8A, data)
+            logger.info(
+                f"Sending fast-switch cmd 0x8A: antennas={antennas}, "
+                f"repeat={ant_repeat}, loops={loop_count}, "
+                f"data={data.hex()}"
+            )
+            self.socket.sendall(packet)
+
+            # Collect responses for the expected duration
+            start_time = time.time()
+            last_data_time = start_time
+
+            while (time.time() - start_time) < scan_duration + 2.0:
+                try:
+                    self.socket.settimeout(0.5)
+                    recv_data = self.socket.recv(4096)
+                    if recv_data:
+                        last_data_time = time.time()
+                        bytes_received += len(recv_data)
+                        self._recv_buffer.extend(recv_data)
+                        frames_parsed += self._extract_frames_from_buffer()
+
+                        # Accumulate tags found so far
+                        cycle_tags = set(self.work_mode_tags)
+                        for tag in cycle_tags:
+                            tag_count[tag] += 1
+                        self.work_mode_tags.clear()
+                    else:
+                        if (time.time() - last_data_time) > 2.0:
+                            break
+                except socket.timeout:
+                    if (time.time() - last_data_time) > 2.0:
+                        break
+                    continue
+                except Exception as e:
+                    logger.error(f"Fast-switch receive error: {e}")
+                    break
+
+            # Process any remaining buffer
+            if self._recv_buffer:
+                frames_parsed += self._extract_frames_from_buffer()
+                for tag in self.work_mode_tags:
+                    tag_count[tag] += 1
+
+            detected_tags = list(tag_count.keys())
+            logger.info(
+                f"Fast-switch scan complete: {len(detected_tags)} tags, "
+                f"{bytes_received} bytes, {frames_parsed} frames"
+            )
+
+            return {
+                'tags': detected_tags,
+                'tag_count': dict(tag_count),
+                'bytes_received': bytes_received,
+                'frames_parsed': frames_parsed,
+            }
 
         except Exception as e:
-            logger.error(f"RFID read error: {e}")
-            return []
-        finally:
-            self.stop_reading()
-            self.disconnect()
+            logger.error(f"Fast-switch scan error: {e}")
+            return {
+                'tags': list(tag_count.keys()),
+                'tag_count': dict(tag_count),
+                'bytes_received': bytes_received,
+                'frames_parsed': frames_parsed,
+            }
 
     def read_rfid_tags_voting(
         self,
@@ -270,96 +707,96 @@ class RFIDReader:
         idle_break_timeout: Optional[float] = None,
         max_cycle_wait: Optional[float] = None,
         log_each_cycle: bool = False,
+        scan_duration: Optional[float] = None,
     ) -> List[str]:
         """
         Read RFID tags with voting mechanism for better accuracy.
 
-        A tag is considered present only if it appears in at least min_appearances
-        out of total_cycles scans. This reduces false positives from sporadic reads.
+        NEW IMPLEMENTATION: Uses time-window voting within a single continuous scan
+        instead of repeated command flooding. This preserves the voting API for
+        backward compatibility while fixing the command flooding issue.
+
+        Voting is now based on detection count over time:
+        - A tag must be detected at least min_appearances times during the scan
 
         Args:
-            total_cycles: Total number of scan cycles (default 10)
-            min_appearances: Minimum times a tag must appear to be considered present (default 3)
-            read_interval: Seconds between cycles (None uses hardware default)
-            idle_break_timeout: Seconds of inactivity before a cycle ends
-            max_cycle_wait: Max seconds to wait for data in one cycle
-            log_each_cycle: Log tags found on each cycle
+            total_cycles: Used to calculate scan_duration if not provided
+                         (scan_duration = total_cycles * read_interval)
+            min_appearances: Minimum detection count for a tag to be confirmed
+            read_interval: Used for scan_duration calculation (default 1.0s)
+            idle_break_timeout: Seconds of inactivity before breaking early
+            max_cycle_wait: Ignored (for backward compatibility)
+            log_each_cycle: Log tags found periodically
+            scan_duration: Direct override for scan duration in seconds
 
         Returns:
             List of tags that passed the voting threshold
         """
-        from collections import Counter
-
-        if not self.connect():
-            return []
-
-        # Clear any stale buffer data from a previous call
-        self._recv_buffer.clear()
-
-        tag_counter = Counter()
-        cycle = 0
-        self.reading = True
-
         interval = RFID_READ_INTERVAL if read_interval is None else read_interval
+
+        # Calculate scan duration from legacy parameters if not provided
+        if scan_duration is None:
+            scan_duration = total_cycles * interval
+
+        log_interval = interval if log_each_cycle else scan_duration
+
         prev_idle = self._idle_break_timeout
-        prev_max_wait = self._max_cycle_wait
         if idle_break_timeout is not None:
             self._idle_break_timeout = idle_break_timeout
-        if max_cycle_wait is not None:
-            self._max_cycle_wait = max_cycle_wait
-
-        logger.info(
-            "Starting RFID voting scan - %s cycles, need %s appearances (interval=%.2fs, idle=%.2fs, max_wait=%.2fs)",
-            total_cycles,
-            min_appearances,
-            interval,
-            self._idle_break_timeout,
-            self._max_cycle_wait,
-        )
 
         try:
-            session = 0x01
-            target = 0x00
-            repeat = 0x01
+            logger.info(
+                "Starting RFID voting scan - duration=%.1fs, need %s+ appearances",
+                scan_duration,
+                min_appearances,
+            )
 
-            while self.reading and cycle < total_cycles:
-                # Toggle target between 0x00 and 0x01 every cycle to capture inverted tags (Session 1)
-                target = 0x00 if cycle % 2 == 0 else 0x01
-                cmd_payload = bytes([session, target, repeat])
+            result = self.read_rfid_tags_continuous(
+                scan_duration=scan_duration,
+                toggle_target=True,
+                idle_break_timeout=idle_break_timeout,
+                log_interval=log_interval,
+            )
 
-                # Clear tags for this cycle to get fresh detection
-                self.work_mode_tags.clear()
+            detected_tags = result['tags']
+            tag_count = result['tag_count']
 
-                packet = self._build_packet(0x8B, cmd_payload)
-                if self.socket:
-                    self.socket.sendall(packet)
+            # Apply voting threshold based on detection count
+            confirmed_tags = [
+                tag for tag in detected_tags
+                if tag_count.get(tag, 0) >= min_appearances
+            ]
 
-                # Receive for this cycle
-                self._receive_and_process()
-                cycle_tags = set(self.work_mode_tags)
+            # Adaptive threshold: if we filtered out too many tags (>50%),
+            # lower the threshold to capture weak signals
+            filtered_ratio = 1.0 - (len(confirmed_tags) / len(detected_tags)) if detected_tags else 0
+            if detected_tags and filtered_ratio > 0.5:
+                # Lower threshold to 1 to capture all detected tags
+                logger.warning(
+                    "Voting threshold too aggressive (filtered %.0f%% tags), "
+                    "lowering threshold to 1",
+                    filtered_ratio * 100,
+                )
+                confirmed_tags = detected_tags
 
-                # Count each tag found in this cycle
-                for tag in cycle_tags:
-                    tag_counter[tag] += 1
+            # If voting threshold filtered all tags, fall back
+            if not confirmed_tags and detected_tags:
+                logger.warning(
+                    "Voting threshold (%d) filtered all tags, "
+                    "falling back to single detection mode",
+                    min_appearances,
+                )
+                confirmed_tags = detected_tags
 
-                if log_each_cycle:
-                    logger.info(
-                        "[RFID] Cycle %s/%s -> %s",
-                        cycle + 1,
-                        total_cycles,
-                        sorted(cycle_tags),
-                    )
-                else:
-                    logger.debug(f"[Cycle {cycle+1}/{total_cycles}] Found: {list(cycle_tags)}")
-                cycle += 1
-                time.sleep(interval)
+            # Sort by detection count (most reliable first)
+            confirmed_tags = sorted(confirmed_tags, key=lambda t: tag_count.get(t, 0), reverse=True)
 
-            # Apply voting threshold - tag must appear at least min_appearances times
-            confirmed_tags = [tag for tag, count in tag_counter.items() if count >= min_appearances]
-
-            logger.info(f"RFID voting completed: {len(confirmed_tags)} confirmed tags (from {len(tag_counter)} unique)")
-            logger.info(f"Tag appearances: {dict(tag_counter)}")
-            logger.info(f"Confirmed tags: {confirmed_tags}")
+            logger.info(
+                "RFID voting complete: %d confirmed (from %d detected, threshold=%d)",
+                len(confirmed_tags), len(detected_tags), min_appearances,
+            )
+            logger.info("Tag detection counts: %s", dict(sorted(tag_count.items(), key=lambda x: x[1], reverse=True)))
+            logger.info("Confirmed tags: %s", confirmed_tags)
 
             return confirmed_tags
 
@@ -368,14 +805,277 @@ class RFIDReader:
             return []
         finally:
             self._idle_break_timeout = prev_idle
-            self._max_cycle_wait = prev_max_wait
-            self.stop_reading()
+
+    def read_rfid_tags_continuous(
+        self,
+        scan_duration: float = 5.0,
+        toggle_target: bool = True,
+        idle_break_timeout: Optional[float] = None,
+        log_interval: float = 0.5,
+        antenna: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """
+        Continuous scan with cycle-by-cycle approach (based on master branch).
+        This is more reliable than the optimized version that had timing issues.
+
+        Args:
+            scan_duration: Total scan time in seconds
+            toggle_target: Alternate inventory target each cycle
+            idle_break_timeout: Seconds of silence before ending a cycle
+            log_interval: Logging interval
+            antenna: Override antenna ID (e.g. 0x00, 0x01). None uses default.
+        """
+        from collections import defaultdict
+
+        tag_count: Dict[str, int] = defaultdict(int)
+        bytes_received = 0
+        frames_parsed = 0
+        self.work_mode_tags.clear()
+        self._recv_buffer.clear()
+
+        if not self.connect():
+            return {'tags': [], 'tag_count': {}, 'bytes_received': 0, 'frames_parsed': 0}
+
+        # Override antenna if specified (after connect which calls _init_reader)
+        if antenna is not None:
+            self._set_antenna(antenna)
+
+        try:
+            session = 0x01
+            repeat = 0x0A  # was 0x01 - more anti-collision rounds per command = fewer misses
+            start_time = time.time()
+            cycle = 0
+            interval = 0.3  # Shorter interval for more cycles in same time
+
+            self.reading = True
+
+            # Set up idle timeout
+            prev_idle = self._idle_break_timeout
+            if idle_break_timeout is not None:
+                self._idle_break_timeout = idle_break_timeout
+
+            logger.info(f"Starting continuous scan for {scan_duration}s...")
+
+            while self.reading:
+                now = time.time()
+                if now - start_time >= scan_duration:
+                    break
+
+                # Toggle target every cycle to capture inverted tags
+                target = 0x00 if cycle % 2 == 0 else 0x01
+                cmd_payload = bytes([session, target, repeat])
+
+                # Clear tags for this cycle to get fresh detection
+                self.work_mode_tags.clear()
+
+                # Send inventory command
+                packet = self._build_packet(0x8B, cmd_payload)
+                self.socket.sendall(packet)
+
+                # Receive for this cycle
+                cycle_start = time.time()
+                last_data_time = cycle_start
+
+                while (time.time() - cycle_start) < self._max_cycle_wait:
+                    try:
+                        self.socket.settimeout(0.1)
+                        data = self.socket.recv(4096)
+                        if data:
+                            last_data_time = time.time()
+                            bytes_received += len(data)
+                            self._recv_buffer.extend(data)
+                            frames_parsed += self._extract_frames_from_buffer()
+                        else:
+                            if (time.time() - last_data_time) > self._idle_break_timeout:
+                                break
+                    except socket.timeout:
+                        if (time.time() - last_data_time) > self._idle_break_timeout:
+                            break
+                        continue
+                    except Exception as e:
+                        logger.error(f"RFID receive error: {e}")
+                        break
+
+                # Count tags found in this cycle
+                cycle_tags = set(self.work_mode_tags)
+                for tag in cycle_tags:
+                    tag_count[tag] += 1
+
+                cycle += 1
+                time.sleep(interval)
+
+            # Restore idle timeout
+            self._idle_break_timeout = prev_idle
+
+            detected_tags = list(tag_count.keys())
+            logger.info(f"Scan complete: {len(detected_tags)} tags found, {bytes_received} bytes received")
+
+            return {
+                'tags': detected_tags,
+                'tag_count': dict(tag_count),
+                'bytes_received': bytes_received,
+                'frames_parsed': frames_parsed,
+            }
+
+        except Exception as e:
+            logger.error(f"Scan error: {e}")
+            return {'tags': [], 'tag_count': {}, 'bytes_received': bytes_received, 'frames_parsed': frames_parsed}
+        finally:
+            self.reading = False
             self.disconnect()
+
+    def _scan_session_antenna(
+        self,
+        session: int,
+        antenna: Optional[int],
+        duration: float,
+        toggle_target: bool = True,
+    ) -> 'Counter':
+        """One 0x8B inventory scan pinned to a fixed Gen2 session (already connected).
+
+        Mirrors the proven test_rfid_params technique: per cycle send 0x8B with the
+        given session, toggle Target A/B, accumulate per-cycle detections. Returns a
+        Counter of EPC -> number of cycles it was seen in. Assumes self.socket is open.
+        """
+        from collections import Counter
+
+        tag_count: 'Counter' = Counter()
+        repeat = 0x01
+
+        if antenna is not None:
+            self._set_antenna(antenna)
+            time.sleep(0.05)
+
+        self._recv_buffer.clear()
+        start_time = time.time()
+        cycle = 0
+
+        while (time.time() - start_time) < duration:
+            target = 0x00 if (not toggle_target or cycle % 2 == 0) else 0x01
+            cmd_payload = bytes([session & 0x03, target, repeat])
+
+            self.work_mode_tags.clear()
+            try:
+                self.socket.sendall(self._build_packet(0x8B, cmd_payload))
+            except Exception as e:
+                logger.error(f"Multi-session send error: {e}")
+                break
+
+            cycle_start = time.time()
+            last_data_time = cycle_start
+            while (time.time() - cycle_start) < self._max_cycle_wait:
+                try:
+                    self.socket.settimeout(0.1)
+                    data = self.socket.recv(4096)
+                    if data:
+                        last_data_time = time.time()
+                        self._recv_buffer.extend(data)
+                        self._extract_frames_from_buffer()
+                    else:
+                        if (time.time() - last_data_time) > 0.3:
+                            break
+                except socket.timeout:
+                    if (time.time() - last_data_time) > 0.3:
+                        break
+                except Exception as e:
+                    logger.error(f"Multi-session recv error: {e}")
+                    break
+
+            for tag in self.work_mode_tags:
+                tag_count[tag] += 1
+            cycle += 1
+            time.sleep(0.3)
+
+        # Drain any remaining buffered frames from the last cycle
+        if self._recv_buffer:
+            self._extract_frames_from_buffer()
+            for tag in self.work_mode_tags:
+                tag_count[tag] += 1
+
+        return tag_count
+
+    def read_rfid_tags_multisession(
+        self,
+        sessions: Optional[List[int]] = None,
+        antennas: Optional[List[int]] = None,
+        duration_per_combo: float = 2.0,
+        return_details: bool = False,
+    ) -> Union[List[str], Dict[str, Any]]:
+        """Union-scan across Gen2 sessions (and antennas) to break the single-session ceiling.
+
+        A single Gen2 session plateaus in this cabinet (~35/39 tags): once a tag is
+        inventoried its session flag flips to B and it goes quiet, so collision-prone
+        / shadowed tags never get re-counted. Cycling S0->S3 gives each tag independent
+        chances to respond in a session where it is still 'fresh'. Connects once, loops
+        session x antenna with the proven per-session 0x8B technique, unions the results.
+
+        Total scan time ~= len(sessions) * len(antennas) * duration_per_combo.
+
+        Args:
+            sessions: Gen2 sessions to cycle (default [0,1,2,3] = S0..S3).
+            antennas: Antenna IDs to cycle (default [0x00]). Note: in this cabinet
+                      antenna 1's tags are a subset of antenna 0, so [0] is usually enough.
+            duration_per_combo: Seconds to scan each (session, antenna) pair.
+            return_details: If True, return dict with per-combo breakdown.
+        """
+        from collections import Counter
+
+        if not sessions:
+            sessions = [0x00, 0x01, 0x02, 0x03]
+        if not antennas:
+            antennas = [0x00]
+
+        all_tags = set()
+        tag_counter: 'Counter' = Counter()
+        combo_details = []
+        est_total = len(sessions) * len(antennas) * duration_per_combo
+
+        logger.info(
+            "Multi-session inventory: sessions=%s, antennas=%s, %.1fs/combo (~%.0fs total)",
+            [f"S{s}" for s in sessions],
+            [f"0x{a:02X}" for a in antennas],
+            duration_per_combo,
+            est_total,
+        )
+
+        if not self.connect():
+            return [] if not return_details else {'tags': [], 'tag_counter': {}, 'combo_details': []}
+
+        try:
+            for session in sessions:
+                for ant in antennas:
+                    before = len(all_tags)
+                    # Only switch antenna when more than one is configured.
+                    tc = self._scan_session_antenna(
+                        session,
+                        ant if len(antennas) > 1 else None,
+                        duration_per_combo,
+                    )
+                    all_tags.update(tc.keys())
+                    tag_counter.update(tc)
+                    new = len(all_tags) - before
+                    combo_details.append({'session': session, 'antenna': ant,
+                                          'tags': len(tc), 'new': new})
+                    logger.info(
+                        "  S%s ant=0x%02X: %d tags, +%d new (total %d)",
+                        session, ant, len(tc), new, len(all_tags),
+                    )
+        finally:
+            self.disconnect()
+
+        sorted_tags = sorted(all_tags, key=lambda t: tag_counter[t], reverse=True)
+        logger.info("Multi-session complete: %d unique tags", len(sorted_tags))
+
+        if return_details:
+            return {'tags': sorted_tags, 'tag_counter': dict(tag_counter),
+                    'combo_details': combo_details}
+        return sorted_tags
 
     def _receive_and_process(self):
         """Receive and process RFID data."""
         start_time = time.time()
         last_data_time = time.time()
+        bytes_received = 0
 
         while self.reading and (time.time() - start_time) < self._max_cycle_wait:
             try:
@@ -383,74 +1083,169 @@ class RFIDReader:
                 data = self.socket.recv(4096)
                 if data:
                     last_data_time = time.time()
+                    bytes_received += len(data)
                     self._recv_buffer.extend(data)
-                    self._extract_frames_from_buffer()
+                    frames_found = self._extract_frames_from_buffer()
+                    logger.debug(f"RFID recv: {len(data)} bytes, frames found: {frames_found}")
                 else:
+                    # No data received, check idle timeout
                     if (time.time() - last_data_time) > self._idle_break_timeout:
+                        logger.debug(f"RFID idle timeout after {bytes_received} bytes")
                         break
             except socket.timeout:
                 if (time.time() - last_data_time) > self._idle_break_timeout:
+                    logger.debug(f"RFID idle timeout (socket) after {bytes_received} bytes")
                     break
                 continue
             except Exception as e:
                 logger.error(f"RFID receive error: {e}")
                 break
 
-    def _extract_frames_from_buffer(self):
-        """Extract frames from receive buffer."""
+        if bytes_received > 0:
+            logger.debug(f"RFID receive cycle complete: {bytes_received} bytes, buffer remaining: {len(self._recv_buffer)}")
+
+    def _extract_frames_from_buffer(self) -> int:
+        """
+        Extract frames from receive buffer with robust error recovery.
+
+        Improvement: On checksum failure, use Len field to skip the entire
+        failed frame instead of advancing pos by only 1. This prevents cascade
+        alignment loss in high-throughput scenarios.
+
+        Returns:
+            Number of valid frames extracted
+        """
         buf = self._recv_buffer
+
+        # Buffer overflow protection: with fast-switch (0x8A) the reader can
+        # send 30+ tags per burst (~30 bytes each = ~1KB).  Allow up to 8KB
+        # before giving up on sync recovery.
+        MAX_BUFFER_SIZE = 8192
+        if len(buf) > MAX_BUFFER_SIZE:
+            logger.warning("Buffer overflow (%d bytes) or sync lost, clearing buffer", len(buf))
+            buf.clear()
+            return 0
+
         pos = 0
+        frames_found = 0
+        MAX_FRAME_LEN = 256
 
         while pos + 5 <= len(buf):
+            # Look for frame header 0xA0
             if buf[pos] != 0xA0:
                 pos += 1
                 continue
 
+            # Check if we have enough bytes for length field
+            if pos + 2 > len(buf):
+                break
+
             length = buf[pos + 1]
             frame_total_len = 2 + length
 
+            # Sanity check: frame length should be reasonable
+            if length < 3 or frame_total_len > MAX_FRAME_LEN:
+                logger.debug(f"Invalid frame length {length} at pos {pos}, skipping header")
+                pos += 1  # Skip this 0xA0 and look for next
+                continue
+
+            # Check if we have the complete frame
             if pos + frame_total_len > len(buf):
+                logger.debug(f"Incomplete frame: need {frame_total_len}, have {len(buf) - pos}")
                 break
 
+            # Extract and validate frame
             frame = bytes(buf[pos: pos + frame_total_len])
             received_cs = frame[-1]
-            calc_cs = self._checksum(frame[:-1])
+            # Checksum: hardware appears to include 0xA0 header in calculation
+            # Master branch uses frame[:-1], new implementation used frame[1:-1]
+            # Using master approach for compatibility
+            calc_cs = self._checksum(frame[:-1])  # Include 0xA0, exclude checksum byte
 
             if received_cs != calc_cs:
+                logger.debug(
+                    "Checksum mismatch at pos %d: received 0x%02X, calc 0x%02X, frame: %s",
+                    pos, received_cs, calc_cs, frame[:min(20, len(frame))].hex(),
+                )
+                # CRITICAL: On checksum failure, only advance by 1 byte
+                # The length field may be corrupted, so skipping the whole frame
+                # could cause us to miss valid frames that follow
                 pos += 1
                 continue
 
+            # Valid frame found, parse it
             try:
                 self._parse_frame(frame)
+                frames_found += 1
             except Exception as e:
-                logger.debug(f"Frame parse error: {e}")
+                logger.warning(f"Frame parse error: {e}, frame: {frame.hex()}")
 
             pos += frame_total_len
 
+        # Keep unprocessed bytes in buffer
         if pos > 0:
-            remaining = buf[pos:]
-            self._recv_buffer = bytearray(remaining)
+            self._recv_buffer = bytearray(buf[pos:])
+
+        return frames_found
+
+    def _find_next_header(self, buf: bytearray, start: int, end: int) -> int:
+        """Find next 0xA0 header in buffer range."""
+        for i in range(start, min(end, len(buf))):
+            if buf[i] == 0xA0:
+                return i
+        return -1
 
     def _parse_frame(self, frame: bytes):
         """Parse a single frame."""
+        if len(frame) < 5:
+            logger.debug(f"Frame too short: {len(frame)} bytes")
+            return
+
         length = frame[1]
+        addr = frame[2]
         cmd = frame[3]
         data_len = max(0, length - 3)
+
+        # Validate frame structure
+        expected_len = 2 + length
+        if len(frame) != expected_len:
+            logger.debug(f"Frame length mismatch: expected {expected_len}, got {len(frame)}")
+            return
+
         data = frame[4:4 + data_len] if data_len > 0 else b''
 
-        if cmd == 0x8B:
+        logger.debug(f"Parsing frame: addr=0x{addr:02X}, cmd=0x{cmd:02X}, data_len={data_len}")
+
+        if cmd in (0x8B, 0x8A):
+            # A real tag record is always EVEN length: freq(1)+PC(2)+EPC(2*words)+RSSI(1).
+            # The end-of-inventory status frame (AntID + ReadRate + TotalRead = 7 bytes)
+            # is ODD, so any odd-length payload is a status frame, not tag data. Skip it
+            # instead of decoding garbage / phantom tags into work_mode_tags.
+            if data_len % 2 != 0:
+                logger.debug(f"Inventory status frame (cmd=0x{cmd:02X}, {data_len}B) - not tag data")
+                return
             self._parse_tag_data_bytes(data)
+        else:
+            logger.debug(f"Unknown command: 0x{cmd:02X}")
 
     def _parse_tag_data_bytes(self, data: bytes):
-        """Parse tag data from frame."""
+        """
+        Parse tag data from frame.
+
+        Frame format (per tag):
+        - freq_ant (1 byte): frequency and antenna info
+        - PC (2 bytes): Protocol Control word
+        - EPC (variable): Electronic Product Code
+        - RSSI (1 byte): Signal strength
+        """
         pos = 0
+
         while pos < len(data):
-            if pos + 4 > len(data):
+            if pos + 6 > len(data):
                 break
 
             freq_ant = data[pos]
             pos += 1
-            antenna = (freq_ant & 0x03) + 1
 
             pc_byte1 = data[pos]
             pc_byte2 = data[pos + 1]
@@ -473,8 +1268,14 @@ class RFIDReader:
             pos += 1
 
             epc_hex = epc_data.hex().upper()
+            # RSSI is a single byte; subtract the reader's 129 offset to get dBm.
+            # (Previously this was a no-op ternary - both branches were identical.)
+            rssi_dbm = rssi_byte - 129
             if self._validate_epc(epc_hex) and epc_hex not in IGNORED_TAGS:
                 self.work_mode_tags.add(epc_hex)
+                logger.debug(f"Tag: EPC={epc_hex}, RSSI={rssi_dbm}dBm (raw=0x{rssi_byte:02X})")
+                if self._tag_callback:
+                    self._tag_callback(epc_hex)
 
     def _validate_epc(self, epc_hex: str) -> bool:
         """Validate EPC data."""
@@ -513,10 +1314,13 @@ class RaspberryPiHardware(HardwareInterface):
         self._initialized = False
         self._drawer_states = {i: DrawerState.CLOSED for i in range(num_drawers)}
         self._nfc_reader = None
-        self._rfid_reader = None
         self._hid_reader = None
+        self._rfid_reader = None
         self._nfc_mode = nfc_mode
         self._strip = None
+        # Cache for cross-read data (when NFC is read during QR read or vice versa)
+        self._last_read_data = None
+        self._last_read_type = None
 
     def initialize(self) -> None:
         """Initialize hardware components."""
@@ -558,67 +1362,151 @@ class RaspberryPiHardware(HardwareInterface):
         logger.info("Raspberry Pi hardware initialized (Solenoids + WS2812B)")
 
     def _init_nfc_reader(self):
-        """Initialize NFC reader - tries serial first, then HID keyboard."""
+        """
+        Initialize NFC reader with multiple fallback modes.
+
+        Priority:
+        1. Serial mode (optimal for EMI stability, requires serial firmware)
+        2. HIDRAW mode (direct hidraw access, avoids Linux input event noise)
+        3. HID keyboard mode (fallback using evdev)
+        """
         if self._nfc_mode == "none":
             logger.info("NFC reader disabled")
             return
 
-        # Try serial reader first
+        self._nfc_reader = None
+        self._hid_reader = None
+
+        # Try 1: Serial mode (optimal, requires serial firmware)
         if self._nfc_mode in ("auto", "serial"):
             try:
                 self._nfc_reader = NFCQRReader()
-                if self._nfc_reader._test_connection():
+                if self._nfc_reader.is_connected():
                     logger.info("Serial NFC reader initialized")
                     return
+                else:
+                    self._nfc_reader.close()
+                    self._nfc_reader = None
             except Exception as e:
                 logger.debug(f"Serial NFC reader not available: {e}")
 
-        # Try HID keyboard reader
+        # Try 2: HIDRAW mode (direct access, less noise than evdev)
+        if self._nfc_mode in ("auto", "hidraw"):
+            try:
+                self._hid_reader = HIDRawReader()
+                if self._hid_reader.is_available():
+                    logger.info("HIDRAW NFC reader initialized (direct mode)")
+                    return
+                else:
+                    self._hid_reader.close()
+                    self._hid_reader = None
+            except Exception as e:
+                logger.debug(f"HIDRAW NFC reader not available: {e}")
+
+        # Try 3: HID keyboard mode (fallback using evdev)
         if self._nfc_mode in ("auto", "hid"):
             try:
-                from .hid_keyboard_reader import HIDKeyboardReader
-                self._hid_reader = HIDKeyboardReader()
-                if self._hid_reader.is_available():
-                    logger.info("HID keyboard NFC reader initialized")
-                    return
+                from .hid_keyboard_reader import HIDKeyboardReader, EVDEV_AVAILABLE
+                if EVDEV_AVAILABLE:
+                    self._hid_reader = HIDKeyboardReader()
+                    if self._hid_reader.is_available():
+                        logger.info("HID Keyboard NFC reader initialized (evdev mode)")
+                        return
+                    else:
+                        self._hid_reader = None
             except Exception as e:
-                logger.debug(f"HID keyboard reader not available: {e}")
+                logger.debug(f"HID Keyboard reader not available: {e}")
 
         logger.warning("No NFC reader available")
 
     def read_nfc(self, timeout: float = 30.0) -> Optional[str]:
-        """Read NFC card UID."""
-        if self._hid_reader and self._hid_reader.is_available():
-            return self._hid_reader.read_card(timeout=timeout)
-
-        if not self._nfc_reader:
-            return None
-
+        """Read NFC card UID (supports serial and HID modes)."""
         start_time = time.time()
+
         while time.time() - start_time < timeout:
-            uid = self._nfc_reader.read_nfc_card()
-            if uid:
-                return uid
-            time.sleep(0.1)
+            # Try serial reader first
+            if self._nfc_reader and self._nfc_reader.is_connected():
+                result = self._nfc_reader.read_card()
+                if result:
+                    if result['type'] == 'nfc':
+                        return result['data']
+                    else:
+                        self._last_read_data = result['data']
+                        self._last_read_type = 'qr'
+
+            # Try HID reader (hidraw or evdev mode)
+            if self._hid_reader and self._hid_reader.is_available():
+                result = self._hid_reader.read_card(timeout=0.1)
+                if result:
+                    if result['type'] == 'nfc':
+                        return result['data']
+                    else:
+                        self._last_read_data = result['data']
+                        self._last_read_type = 'qr'
+
+            time.sleep(0.05)
 
         return None
 
     def read_qr(self, timeout: float = 30.0) -> Optional[str]:
-        """Read QR code."""
-        if self._hid_reader and self._hid_reader.is_available():
-            result = self._hid_reader.read_card(timeout=timeout)
-            if result:
-                return result
-
-        if not self._nfc_reader:
-            return None
-
+        """Read QR code (supports serial and HID modes)."""
         start_time = time.time()
+
+        # Check if we have cached QR data from previous read
+        if hasattr(self, '_last_read_data') and getattr(self, '_last_read_type', None) == 'qr':
+            data = self._last_read_data
+            self._last_read_data = None
+            self._last_read_type = None
+            logger.info(f"QR code returned from cache: {data[:30]}...")
+            return data
+
         while time.time() - start_time < timeout:
-            qr = self._nfc_reader.read_qr_code()
-            if qr:
-                return qr
-            time.sleep(0.1)
+            # Try serial reader first
+            if self._nfc_reader and self._nfc_reader.is_connected():
+                result = self._nfc_reader.read_card()
+                if result:
+                    if result['type'] == 'qr':
+                        return result['data']
+                    else:
+                        self._last_read_data = result['data']
+                        self._last_read_type = 'nfc'
+
+            # Try HID reader (hidraw or evdev mode)
+            if self._hid_reader and self._hid_reader.is_available():
+                result = self._hid_reader.read_card(timeout=0.1)
+                if result:
+                    if result['type'] == 'qr':
+                        return result['data']
+                    else:
+                        self._last_read_data = result['data']
+                        self._last_read_type = 'nfc'
+
+            time.sleep(0.05)
+
+        return None
+
+    def read_card_auto(self, timeout: float = 30.0) -> Optional[Dict[str, str]]:
+        """
+        Read card and automatically detect type (NFC or QR).
+
+        Supports both serial and HID modes.
+        """
+        start_time = time.time()
+
+        while time.time() - start_time < timeout:
+            # Try serial reader first (if available)
+            if self._nfc_reader and self._nfc_reader.is_connected():
+                result = self._nfc_reader.read_card()
+                if result:
+                    return result
+
+            # Try HID reader (hidraw or evdev mode)
+            if self._hid_reader and self._hid_reader.is_available():
+                result = self._hid_reader.read_card(timeout=0.1)
+                if result:
+                    return result
+
+            time.sleep(0.05)
 
         return None
 
@@ -637,16 +1525,19 @@ class RaspberryPiHardware(HardwareInterface):
         idle_break_timeout: Optional[float] = None,
         max_cycle_wait: Optional[float] = None,
         log_each_cycle: bool = False,
+        scan_duration: Optional[float] = None,
     ) -> List[str]:
         """
         Read RFID tags with voting mechanism for better accuracy.
 
-        A tag is considered present only if it appears in at least min_appearances
-        out of total_cycles scans. This reduces false positives from sporadic reads.
-
         Args:
-            total_cycles: Total number of scan cycles (default 10)
-            min_appearances: Minimum times a tag must appear to be considered present (default 3)
+            total_cycles: Used to calculate scan_duration if not provided
+            min_appearances: Minimum detection count for a tag to be confirmed
+            read_interval: Used for scan_duration calculation
+            idle_break_timeout: Seconds of inactivity before breaking early
+            max_cycle_wait: Ignored (for backward compatibility)
+            log_each_cycle: Log tags found periodically
+            scan_duration: Direct override for scan duration in seconds
 
         Returns:
             List of tags that passed the voting threshold
@@ -661,10 +1552,54 @@ class RaspberryPiHardware(HardwareInterface):
             idle_break_timeout=idle_break_timeout,
             max_cycle_wait=max_cycle_wait,
             log_each_cycle=log_each_cycle,
+            scan_duration=scan_duration,
+        )
+
+    def read_rfid_tags_inventory(
+        self,
+        scan_passes: int = 3,
+        pass_duration: float = 5.0,
+        antennas: Optional[List[int]] = None,
+        ant_repeat: int = 3,
+        loop_count: Optional[int] = None,
+        return_details: bool = False,
+        sessions: Optional[List[int]] = None,
+    ) -> Union[List[str], Dict[str, Any]]:
+        """
+        Inventory-optimized RFID scan for stable counting.
+
+        Performs multiple scan passes across configured antennas and returns
+        union of all detected tags. When `sessions` has >1 entry, performs a
+        multi-session union scan (S0..S3) to recover tags hiding in one
+        session's already-inventoried state.
+
+        Args:
+            scan_passes: Number of scan passes (default 3)
+            pass_duration: Duration of each pass in seconds (default 5.0)
+            antennas: List of antenna IDs to cycle through
+            ant_repeat: Inventory rounds per antenna per loop (0x8A)
+            loop_count: Number of loops for fast-switch command (None = auto)
+            return_details: If True, return dict with per-pass info
+            sessions: Gen2 sessions to cycle (e.g. [0,1,2,3]); >1 enables multi-session
+
+        Returns:
+            List of unique tags, or dict with details when return_details=True
+        """
+        if not self._rfid_reader:
+            return [] if not return_details else {'tags': [], 'pass_details': [], 'tag_counter': {}}
+
+        return self._rfid_reader.read_rfid_tags_inventory(
+            scan_passes=scan_passes,
+            pass_duration=pass_duration,
+            antennas=antennas,
+            ant_repeat=ant_repeat,
+            loop_count=loop_count,
+            sessions=sessions,
+            return_details=return_details,
         )
 
     def unlock_drawer(self, drawer_id: int) -> bool:
-        """Unlock a specific solenoid."""
+        """Unlock a specific solenoid (energize HIGH until lock is called)."""
         if drawer_id < 0 or drawer_id >= len(SOLENOID_PINS):
             return False
 
@@ -679,7 +1614,7 @@ class RaspberryPiHardware(HardwareInterface):
             return False
 
     def lock_drawer(self, drawer_id: int) -> bool:
-        """Lock a specific solenoid."""
+        """Lock a specific solenoid (de-energize LOW)."""
         if drawer_id < 0 or drawer_id >= len(SOLENOID_PINS):
             return False
 
@@ -694,7 +1629,7 @@ class RaspberryPiHardware(HardwareInterface):
             return False
 
     def unlock_all(self) -> bool:
-        """Unlock all solenoids."""
+        """Unlock all solenoids (energize HIGH until lock is called)."""
         try:
             for i in range(self.num_drawers):
                 self.unlock_drawer(i)
@@ -704,7 +1639,7 @@ class RaspberryPiHardware(HardwareInterface):
             return False
 
     def lock_all(self) -> bool:
-        """Lock all solenoids."""
+        """Lock all solenoids (de-energize LOW)."""
         try:
             for i in range(self.num_drawers):
                 self.lock_drawer(i)
@@ -785,6 +1720,9 @@ class RaspberryPiHardware(HardwareInterface):
         if self._nfc_reader:
             self._nfc_reader.close()
 
+        if self._hid_reader:
+            self._hid_reader.close()
+
         if self._rfid_reader:
             self._rfid_reader.disconnect()
 
@@ -793,9 +1731,21 @@ class RaspberryPiHardware(HardwareInterface):
             self.set_all_leds(LEDColor.OFF)
             time.sleep(0.1)  # Allow LED strip to update
 
-        # Clean up GPIO
+        # Clean up GPIO — only non-solenoid pins
+        # Solenoid pins must stay OUTPUT LOW to prevent driver board
+        # from floating HIGH and energizing solenoids after exit
         if RPI_AVAILABLE:
-            GPIO.cleanup()
+            non_solenoid_pins = (
+                DRAWER_SWITCH_PINS + [LED_PIN]
+            )
+            for pin in non_solenoid_pins:
+                try:
+                    GPIO.cleanup(pin)
+                except Exception:
+                    pass
+            # Ensure solenoids stay locked (not cleaned up)
+            for pin in SOLENOID_PINS:
+                GPIO.output(pin, GPIO.LOW)
 
         self._initialized = False
         logger.info("Hardware cleanup complete")
@@ -803,12 +1753,24 @@ class RaspberryPiHardware(HardwareInterface):
 
     def health_check(self) -> Dict[str, Any]:
         """Check hardware health."""
+        # Check NFC status (serial or HID mode)
+        nfc_status = "error"
+        nfc_mode = "none"
+        if self._nfc_reader and self._nfc_reader.is_connected():
+            nfc_status = "ok"
+            nfc_mode = "serial"
+        elif self._hid_reader and self._hid_reader.is_available():
+            nfc_status = "ok"
+            # Detect mode based on class name
+            nfc_mode = getattr(self._hid_reader, '__class__', None).__name__ if self._hid_reader else "hid"
+
         return {
             "status": "healthy" if self._initialized else "not_initialized",
             "mode": "raspberry_pi",
             "rpi_available": RPI_AVAILABLE,
             "solenoids": "ok" if self._initialized else "error",
-            "nfc": "ok" if self._nfc_reader and self._nfc_reader._test_connection() else ("ok" if self._hid_reader and self._hid_reader.is_available() else "error"),
+            "nfc": nfc_status,
+            "nfc_mode": nfc_mode,
             "rfid": "ok" if self._rfid_reader else "error",
             "drawers": self.num_drawers,
             "leds": self.num_leds,

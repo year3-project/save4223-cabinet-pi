@@ -29,13 +29,25 @@ DEFAULT_CONFIG = {
     'api_timeout': 5,       # seconds
     'api_retry_count': 3,
 
-    # RFID scan tuning (voting mode)
+    # RFID scan tuning (optimized for metal cabinet with 150+ tags)
+    # Tested: 28dBm power, 5s duration, 0.3s interval gives best accuracy (~9-11 tags)
     'rfid': {
-        'voting_cycles': 10,
-        'min_appearances': 3,
-        'read_interval': 1.0,
-        'idle_break_timeout': 0.2,
-        'max_cycle_wait': 2.0,
+        'voting_cycles': 17,      # ~5 seconds at 0.3s interval
+        'min_appearances': 1,     # Accept single detection
+        'read_interval': 0.3,     # 0.3s between commands (optimal)
+        'idle_break_timeout': 0.3, # Wait for tag responses
+        'max_cycle_wait': 2.0,    # Max time per cycle
+        'scan_duration': 5.0,     # 5-second scan (best accuracy)
+    },
+
+    # RFID inventory mode - multi-pass scan for maximum accuracy
+    # Used by main.py for inventory counting (accuracy prioritized over speed)
+    'rfid_inventory': {
+        'scan_passes': 2,         # Number of scan passes
+        'pass_duration': 8.0,     # Duration of each pass in seconds
+        'quick_passes': 1,        # Quick scan passes
+        'quick_duration': 2.0,    # Quick scan duration in seconds
+        'antennas': [0, 1],       # Antenna IDs to cycle through (0x00=ant1, 0x01=ant2)
     },
 
     # Cache settings
@@ -65,9 +77,9 @@ DEFAULT_CONFIG = {
         'port': 8080,
     },
 
-    # Hardware mode: 'mock' for testing, 'raspberry_pi' for production
+    # Hardware mode: 'raspberry_pi' for production
     'hardware': {
-        'mode': 'mock',
+        'mode': 'raspberry_pi',
     },
 }
 

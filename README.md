@@ -109,6 +109,25 @@ The Pi communicates with Save4223 backend:
 - `POST /api/edge/sync-session` - Sync RFID scan results
 - `GET /api/edge/local-sync` - Get cached auth/items
 
+## Scripts
+
+### `scripts/full_reset_local_db.py` — Full database reset & re-sync
+
+Wipes **all** local SQLite data and re-fetches users, items, and item types from the remote server. Useful when local cache is stale or corrupted.
+
+```bash
+# Interactive (prompts before wiping)
+uv run scripts/full_reset_local_db.py
+
+# Skip confirmation prompt
+uv run scripts/full_reset_local_db.py --yes
+
+# Skip backup (faster, but no rollback if something goes wrong)
+uv run scripts/full_reset_local_db.py --no-backup
+```
+
+The script auto-detects if the database file is owned by root and re-executes itself with `sudo` when needed. A timestamped backup is saved to `data/local.db.bak.YYYYMMDD_HHMMSS` by default.
+
 ## Documentation
 
 See `/home/ada/save4223/docs/pi-implementation-plan.md` for detailed implementation plan.

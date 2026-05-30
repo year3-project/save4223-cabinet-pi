@@ -189,13 +189,15 @@ class LocalDB:
         
         with self._conn:
             self._conn.execute('''
-                INSERT OR REPLACE INTO auth_cache 
-                (card_uid, user_id, user_name, cabinet_id, cached_at, expires_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT OR REPLACE INTO auth_cache
+                (card_uid, user_id, user_name, email, role, cabinet_id, cached_at, expires_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 card_uid,
                 auth_result.get('user_id'),
                 auth_result.get('user_name'),
+                auth_result.get('email'),
+                auth_result.get('role', 'USER'),
                 auth_result.get('cabinet_id'),
                 datetime.now(),
                 expires
@@ -213,6 +215,8 @@ class LocalDB:
                 'authorized': True,
                 'user_id': row['user_id'],
                 'user_name': row['user_name'],
+                'email': row['email'] or '',
+                'role': row['role'] or 'USER',
                 'cabinet_id': row['cabinet_id'],
                 'source': 'cache'
             }
@@ -598,6 +602,74 @@ class LocalDB:
         rows = self._conn.execute(query, params).fetchall()
         return [dict(row) for row in rows]
 
+    def reconcile_inventory(self, scanned_tags: List[str], cabinet_id: int) -> Dict[str, Any]:
+        """
+        Reconcile live RFID scan against item_cache.
+
+        - AVAILABLE items not scanned → mark MISSING
+        - MISSING items that reappeared → mark AVAILABLE
+        - BORROWED items not scanned → skip (expected)
+        - Unknown tags not in cache → skip
+
+        Returns reconciliation report.
+        """
+        scanned_set = set(scanned_tags)
+
+        # Get all items in cache
+        rows = self._conn.execute('SELECT * FROM item_cache').fetchall()
+        all_items = [dict(row) for row in rows]
+
+        missing = []
+        recovered = []
+        unchanged = 0
+
+        for item in all_items:
+            tag = item['rfid_tag']
+            status = item['status']
+
+            if status == 'BORROWED':
+                # Expected to be absent, skip
+                continue
+            elif status in ('AVAILABLE', 'MISSING'):
+                if tag not in scanned_set:
+                    # Was here (or was missing), now gone
+                    if status == 'AVAILABLE':
+                        missing.append({
+                            'rfid_tag': tag,
+                            'item_id': item['item_id'],
+                            'name': item['name'] or f'Item {tag}',
+                        })
+                        self.update_item_state(tag, 'MISSING', None)
+                else:
+                    if status == 'MISSING':
+                        # Was missing, now found
+                        recovered.append({
+                            'rfid_tag': tag,
+                            'item_id': item['item_id'],
+                            'name': item['name'] or f'Item {tag}',
+                        })
+                        self.update_item_state(tag, 'AVAILABLE', None)
+                    else:
+                        unchanged += 1
+
+        # Save reconciliation as a baseline snapshot
+        recon_session = f'recon-{datetime.now().strftime("%Y%m%d%H%M%S")}'
+        self.save_rfid_snapshot(recon_session, cabinet_id, scanned_tags, 'end')
+
+        logger.info(
+            f"Reconciliation complete: {len(scanned_tags)} scanned, "
+            f"{len(missing)} missing, {len(recovered)} recovered, {unchanged} unchanged"
+        )
+
+        return {
+            'session_id': recon_session,
+            'scanned_tags': scanned_tags,
+            'total_scanned': len(scanned_tags),
+            'missing': missing,
+            'recovered': recovered,
+            'unchanged': unchanged,
+        }
+
     def get_borrowed_items(self, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """Get items currently borrowed."""
         query = 'SELECT * FROM item_cache WHERE status = ?'
@@ -899,6 +971,12 @@ class LocalDB:
             "SELECT COUNT(*) as count FROM item_cache WHERE status = 'BORROWED'"
         ).fetchone()
         stats['items_borrowed'] = row['count']
+
+        # Missing items
+        row = self._conn.execute(
+            "SELECT COUNT(*) as count FROM item_cache WHERE status = 'MISSING'"
+        ).fetchone()
+        stats['items_missing'] = row['count']
 
         # Total access logs
         row = self._conn.execute('SELECT COUNT(*) as count FROM access_logs').fetchone()

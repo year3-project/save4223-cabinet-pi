@@ -71,6 +71,7 @@ class SmartCabinet:
         self.session_id: Optional[str] = None
         self.session_start_time: Optional[datetime] = None
         self._pairing_token: Optional[str] = None  # For QR-first pairing flow
+        self._signin_data: Optional[Dict[str, str]] = None  # For QR sign-in flow
 
         # Initialize components
         logger.info("Initializing Smart Cabinet...")
@@ -126,13 +127,13 @@ class SmartCabinet:
         # Start sync worker
         self.sync_worker.start()
 
-        # Initial sync
+        # Initial sync (server data only, RFID not initialized yet)
         self._initial_sync()
 
         logger.info("Smart Cabinet initialized successfully")
 
     def _initial_sync(self):
-        """Perform initial sync on startup."""
+        """Perform initial sync on startup (server cache only)."""
         logger.info("Performing initial sync...")
         try:
             if self.api.health_check():
@@ -142,6 +143,56 @@ class SmartCabinet:
                 logger.warning("Server unavailable, operating in offline mode")
         except Exception as e:
             logger.warning(f"Initial sync failed: {e}, operating in offline mode")
+
+    def _reconcile(self):
+        """Scan RFID, reconcile local DB, sync with server."""
+        logger.info("Performing inventory reconciliation...")
+        try:
+            scanned_tags = self._scan_rfid()
+            if not scanned_tags:
+                logger.warning("Reconciliation scan found no tags, skipping")
+                return
+
+            cabinet_id = CONFIG.get('cabinet_id', 1)
+            result = self.local_db.reconcile_inventory(scanned_tags, cabinet_id)
+
+            logger.info(
+                f"Reconciliation: {result['total_scanned']} scanned, "
+                f"{len(result['missing'])} missing, {len(result['recovered'])} recovered"
+            )
+
+            if result['missing'] or result['recovered']:
+                for item in result['missing']:
+                    logger.warning(f"  MISSING: {item['name']} ({item['rfid_tag']})")
+                for item in result['recovered']:
+                    logger.info(f"  RECOVERED: {item['name']} ({item['rfid_tag']})")
+
+                # Attempt to sync reconciliation with server
+                try:
+                    self.api.reconcile(
+                        cabinet_id=cabinet_id,
+                        scanned_tags=scanned_tags,
+                        missing_items=result['missing'],
+                        recovered_items=result['recovered'],
+                    )
+                    logger.info("Reconciliation synced to server")
+                except Exception as e:
+                    logger.warning(f"Reconciliation sync failed: {e}, queued for retry")
+                    self.local_db.queue_offline_action(
+                        'reconciliation',
+                        {
+                            'cabinet_id': cabinet_id,
+                            'scanned_tags': scanned_tags,
+                            'missing_items': result['missing'],
+                            'recovered_items': result['recovered'],
+                        },
+                        priority=3,
+                    )
+            else:
+                logger.info("Inventory matches expected state")
+
+        except Exception as e:
+            logger.error(f"Reconciliation failed: {e}")
 
     def _setup_signal_handlers(self):
         """Setup graceful shutdown handlers."""
@@ -190,6 +241,7 @@ class SmartCabinet:
         self.current_card_uid = None
         self.session_id = None
         self.session_start_time = None
+        self._signin_data = None
 
         self._send_to_display({
             'type': 'STATE_CHANGE',
@@ -205,9 +257,44 @@ class SmartCabinet:
         self._send_to_display({
             'type': 'STATE_CHANGE',
             'state': 'AUTHENTICATING',
-            'message': 'Reading card...'
+            'message': 'Authenticating...'
         })
 
+        # QR sign-in path (data already captured in _handle_locked)
+        if self._signin_data:
+            import threading
+            auth_result = [None]
+            def do_signin():
+                try:
+                    resp = self.api.signin(
+                        user_id=self._signin_data['user_id'],
+                        expires_at=self._signin_data['expires_at'],
+                    )
+                    auth_result[0] = {'authorized': True, **resp}
+                except APIError as e:
+                    auth_result[0] = {'authorized': False, 'reason': str(e)}
+            auth_thread = threading.Thread(target=do_signin)
+            auth_thread.start()
+            auth_thread.join(timeout=5)
+            if auth_thread.is_alive():
+                logger.warning("QR sign-in timed out after 5 seconds")
+                self.hardware.beep_error()
+                self._send_to_display({
+                    'type': 'AUTH_FAILURE',
+                    'error': 'Authentication timeout'
+                })
+                time.sleep(2)
+                self.state_machine.transition(SystemState.LOCKED)
+                return
+            result = auth_result[0]
+
+            if result.get('authorized') or result.get('success'):
+                self._handle_auth_success(result)
+            else:
+                self._handle_auth_failure(result)
+            return
+
+        # NFC card path
         # Use card already captured in _handle_locked, or wait for a new scan
         card_uid = self.current_card_uid or self.hardware.read_nfc(timeout=30)
 
@@ -388,7 +475,7 @@ class SmartCabinet:
             # Check if same card scanned (close command)
             card = self.hardware.read_nfc(timeout=0.5)
 
-            if card == self.current_card_uid:
+            if card is not None and card == self.current_card_uid:
                 if self.hardware.are_all_drawers_closed():
                     logger.info("Close command received, all drawers closed")
                     self._send_to_display({
@@ -531,6 +618,10 @@ class SmartCabinet:
             return False
 
         try:
+            if not self.current_user_id:
+                logger.error("Cannot sync session: user_id is missing")
+                return False
+
             result = self.api.sync_session(
                 session_id=self.session_id,
                 cabinet_id=CONFIG['cabinet_id'],
@@ -654,19 +745,20 @@ class SmartCabinet:
 
         self._send_to_display({
             'type': 'PAIRING_MODE',
-            'message': 'Pairing mode: Tap NFC card to complete pairing (10s timeout)'
+            'message': 'Tap your NFC card on the reader to complete pairing'
         })
         self.hardware.set_all_leds('yellow')
 
         # Wait for NFC card tap (10 second timeout)
+        # Use read_card_auto instead of read_nfc so we don't discard QR
+        # data from the shared HID reader buffer.
         start_time = time.time()
         card_uid = None
 
         while time.time() - start_time < 10:
-            card = self.hardware.read_nfc(timeout=0.5)
-            # Accept any non-empty card reading (HID reader handles validation)
-            if card and len(card.strip()) >= 1:
-                card_uid = card.strip()
+            result = self.hardware.read_card_auto(timeout=0.5)
+            if result and result['type'] == 'nfc':
+                card_uid = result['data'].strip()
                 break
             time.sleep(0.1)
 
@@ -678,6 +770,7 @@ class SmartCabinet:
                 'code': 'TIMEOUT'
             })
             self.hardware.beep_error()
+            self.hardware.set_all_leds('off')
             time.sleep(2)
             self._send_to_display({
                 'type': 'STATE_CHANGE',
@@ -721,6 +814,7 @@ class SmartCabinet:
             time.sleep(3)
 
         # Return to idle
+        self.hardware.set_all_leds('off')
         self._send_to_display({
             'type': 'STATE_CHANGE',
             'state': 'IDLE',
@@ -734,33 +828,40 @@ class SmartCabinet:
 
     def _scan_rfid(self) -> list:
         """
-        Perform RFID scan with voting mechanism for accurate results.
+        Perform RFID inventory scan with multi-pass, multi-antenna accumulation.
 
-        Parameters are configurable via CONFIG['rfid'] to balance
-        missed reads vs. false positives.
+        Uses multiple scan passes across configured antennas and returns the
+        union of all detected tags. With dual antennas each pass covers a
+        different physical area, improving read accuracy.
+
+        Parameters are configurable via CONFIG['rfid_inventory'].
         """
-        rfid_cfg = CONFIG.get('rfid', {})
-        total_cycles = rfid_cfg.get('voting_cycles', 10)
-        min_appearances = rfid_cfg.get('min_appearances', 3)
-        read_interval = rfid_cfg.get('read_interval', 1.0)
-        idle_break_timeout = rfid_cfg.get('idle_break_timeout', 0.2)
-        max_cycle_wait = rfid_cfg.get('max_cycle_wait', 2.0)
-        log_each_cycle = rfid_cfg.get('log_each_cycle', False)
+        rfid_cfg = CONFIG.get('rfid_inventory', {})
+        scan_passes = rfid_cfg.get('scan_passes', 3)
+        pass_duration = rfid_cfg.get('pass_duration', 5.0)
+        antennas = rfid_cfg.get('antennas')
+        ant_repeat = rfid_cfg.get('ant_repeat', 3)
+        loop_count = rfid_cfg.get('loop_count', 10)
+        sessions = rfid_cfg.get('sessions')
 
         logger.info(
-            "Starting RFID voting scan (%s cycles, need %s+ appearances)",
-            total_cycles,
-            min_appearances,
+            "Starting RFID inventory scan (%s passes x %ss each, antennas=%s, repeat=%s, loops=%s, sessions=%s)",
+            scan_passes,
+            pass_duration,
+            antennas,
+            ant_repeat,
+            loop_count,
+            sessions,
         )
-        result = self.hardware.read_rfid_tags_voting(
-            total_cycles=total_cycles,
-            min_appearances=min_appearances,
-            read_interval=read_interval,
-            idle_break_timeout=idle_break_timeout,
-            max_cycle_wait=max_cycle_wait,
-            log_each_cycle=log_each_cycle,
+        result = self.hardware.read_rfid_tags_inventory(
+            scan_passes=scan_passes,
+            pass_duration=pass_duration,
+            antennas=antennas,
+            ant_repeat=ant_repeat,
+            loop_count=loop_count,
+            sessions=sessions,
         )
-        logger.info(f"RFID voting scan complete: {len(result)} confirmed tags")
+        logger.info(f"RFID inventory scan complete: {len(result)} unique tags detected")
         return result
 
     # =================================================================================
@@ -775,8 +876,15 @@ class SmartCabinet:
         # Initialize hardware
         self.hardware.initialize()
 
+        # Startup reconciliation (now that RFID hardware is ready)
+        self._reconcile()
+
         # Initial state
         self.state_machine.transition(SystemState.LOCKED)
+
+        # Periodic reconciliation timer
+        last_reconciliation = time.time()
+        reconciliation_interval = 3600  # 1 hour
 
         try:
             while self.running:
@@ -784,6 +892,12 @@ class SmartCabinet:
 
                 if state == SystemState.LOCKED:
                     self._handle_locked()
+
+                    # Periodic reconciliation (only in LOCKED state when idle)
+                    if time.time() - last_reconciliation >= reconciliation_interval:
+                        logger.info("Hourly reconciliation triggered")
+                        self._reconcile()
+                        last_reconciliation = time.time()
                 elif state == SystemState.AUTHENTICATING:
                     pass  # Handled by on_enter
                 elif state == SystemState.UNLOCKED:
@@ -807,26 +921,47 @@ class SmartCabinet:
         if not getattr(self.hardware, '_initialized', False):
             return
 
-        # HID readers deliver both NFC and QR as keystrokes. Avoid short, repeated
-        # reads that can fragment a single scan into noisy pieces.
+        # Use unified card reading method for HID readers
         hid_reader = getattr(self.hardware, '_hid_reader', None)
         if hid_reader and hid_reader.is_available():
-            raw = self.hardware.read_nfc(timeout=1.0)
-            if raw:
-                token = self.pairing_handler.extract_token_from_qr(raw)
-                if token:
-                    logger.info(f"Pairing token detected via HID: {token}")
-                    self._enter_pairing_mode(token)
-                    return
+            result = self.hardware.read_card_auto(timeout=1.0)
+            if result:
+                raw = result['data']
+                card_type = result['type']
 
-                logger.info(f"Card detected: {raw[:10]}...")
-                self.current_card_uid = raw
-                self.state_machine.transition(SystemState.AUTHENTICATING)
+                if card_type == 'qr':
+                    # QR code — check sign-in first, then pairing
+                    signin_data = self.pairing_handler.extract_signin_from_qr(raw)
+                    if signin_data:
+                        logger.info(f"Sign-in QR detected: user {signin_data['user_id'][:8]}...")
+                        self._signin_data = signin_data
+                        self.state_machine.transition(SystemState.AUTHENTICATING)
+                        return
+
+                    token = self.pairing_handler.extract_token_from_qr(raw)
+                    if token:
+                        logger.info(f"Pairing token detected via HID: {token}")
+                        self._enter_pairing_mode(token)
+                        return
+
+                    logger.debug(f"QR code detected but not recognized: {raw[:30]}...")
+                elif card_type == 'nfc':
+                    # NFC card — go straight to authentication
+                    logger.info(f"Card detected: {raw[:10]}...")
+                    self.current_card_uid = raw
+                    self.state_machine.transition(SystemState.AUTHENTICATING)
             return
 
-        # Check for QR code first (pairing mode)
+        # Non-HID mode: Check for QR code first (sign-in or pairing)
         qr = self.hardware.read_qr(timeout=0.1)
         if qr:
+            signin_data = self.pairing_handler.extract_signin_from_qr(qr)
+            if signin_data:
+                logger.info(f"Sign-in QR detected: user {signin_data['user_id'][:8]}...")
+                self._signin_data = signin_data
+                self.state_machine.transition(SystemState.AUTHENTICATING)
+                return
+
             token = self.pairing_handler.extract_token_from_qr(qr)
             if token:
                 logger.info(f"Pairing QR detected: {token}")

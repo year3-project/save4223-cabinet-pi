@@ -65,6 +65,41 @@ class PairingHandler:
                     changed = True
         return cleaned
 
+    def extract_signin_from_qr(self, qr_content: str) -> Optional[Dict[str, str]]:
+        """
+        Extract sign-in data from QR code content.
+
+        Server generates sign-in QR codes containing JSON:
+          {"type": "SIGNIN", "user_id": "uuid", "name": "...", "exp": "ISO timestamp"}
+
+        Returns dict with 'user_id' and 'expires_at' if valid SIGNIN QR, else None.
+        """
+        if not qr_content:
+            return None
+
+        raw = qr_content.strip()
+        if not raw.startswith('{'):
+            return None
+
+        try:
+            import json
+            data = json.loads(raw)
+            if data.get('type') != 'SIGNIN':
+                return None
+
+            user_id = data.get('user_id', '')
+            exp = data.get('exp', '')
+            if not user_id or not exp:
+                logger.debug("SIGNIN QR missing user_id or exp")
+                return None
+
+            logger.debug(f"SIGNIN QR parsed: user_id={user_id[:8]}...")
+            return {'user_id': user_id, 'expires_at': exp}
+
+        except (json.JSONDecodeError, AttributeError) as e:
+            logger.debug(f"Failed to parse SIGNIN QR JSON: {e}")
+            return None
+
     def extract_token_from_qr(self, qr_content: str) -> Optional[str]:
         """
         Extract pairing token from QR code content.
@@ -79,39 +114,48 @@ class PairingHandler:
         output is decoded by stripping M-noise and searching for the
         CARDPAIRING + TOKEN markers.
 
-        Card UIDs are short raw strings (~9 chars) and will never match.
+        Card UIDs are short raw strings (~9 chars) and will never match
+        the JSON or long-payload checks, but may match the direct 8-char
+        pattern — callers must only invoke this for QR-type inputs.
         """
         if not qr_content:
             return None
 
-        qr_content = self._clean_hid_input(qr_content)
-
-        # 1. Direct 8-char token (reader outputs clean token only)
-        if self.QR_TOKEN_PATTERN.match(qr_content):
-            logger.debug(f"Token extracted directly: {qr_content}")
-            return qr_content
-
-        # 2. Clean JSON (reader outputs full ASCII)
-        if qr_content.startswith('{'):
+        # 1. Try clean JSON on the RAW input first (before any uppercasing).
+        #    The HID reader with proper shift-key support outputs valid JSON.
+        raw = qr_content.strip()
+        if raw.startswith('{'):
             try:
                 import json
-                data = json.loads(qr_content)
-                if data.get('type') == 'CARD_PAIRING':
+                data = json.loads(raw)
+                qr_type = data.get('type', '')
+                if qr_type == 'SIGNIN':
+                    # Not a pairing QR — caller should use extract_signin_from_qr
+                    return None
+                if qr_type == 'CARD_PAIRING':
                     token = data.get('token', '').upper()
                     if self.QR_TOKEN_PATTERN.match(token):
-                        logger.debug(f"Token extracted from JSON: {token}")
+                        logger.debug(f"Token extracted from raw JSON: {token}")
                         return token
             except (json.JSONDecodeError, AttributeError):
                 pass
 
-        # 3. HID-encoded JSON or URL: special chars stripped, M-noise interspersed.
+        # 2. Clean HID input (uppercases + strips noise) for fallback checks.
+        cleaned = self._clean_hid_input(qr_content)
+
+        # 3. Direct 8-char token (reader outputs clean token only)
+        if self.QR_TOKEN_PATTERN.match(cleaned):
+            logger.debug(f"Token extracted directly: {cleaned}")
+            return cleaned
+
+        # 4. HID-encoded JSON or URL: special chars stripped, M-noise interspersed.
         #    Card UIDs are short (~9 chars); QR payloads are typically much longer.
-        if len(qr_content) >= 20:
-            token = self._extract_hid_json_token(qr_content)
+        if len(cleaned) >= 20:
+            token = self._extract_hid_json_token(cleaned)
             if token:
                 return token
 
-            token = self._extract_hid_marker_token(qr_content)
+            token = self._extract_hid_marker_token(cleaned)
             if token:
                 return token
 
@@ -216,6 +260,8 @@ class PairingHandler:
                     auth_result={
                         'user_id': result.get('userId'),
                         'user_name': result.get('userName', 'Unknown'),
+                        'email': result.get('email', ''),
+                        'role': result.get('role', 'USER'),
                         'cabinet_id': cabinet_id
                     },
                     ttl=86400 * 30  # 30 days

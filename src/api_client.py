@@ -227,15 +227,69 @@ class APIClient:
     def pair_card(self, pairing_token: str, card_uid: str, cabinet_id: int) -> Dict[str, Any]:
         """
         Pair an NFC card with a user using a pairing token.
-        
+
         POST /api/edge/pair-card
         """
         logger.debug(f"Pairing card: {card_uid[:10]}... with token")
-        
+
         result = self._request('POST', '/api/edge/pair-card', json={
             'pairing_token': pairing_token,
             'card_uid': card_uid,
             'cabinet_id': cabinet_id,
         })
-        
+
+        return result
+
+    def signin(self, user_id: str, expires_at: str) -> Dict[str, Any]:
+        """
+        Authenticate user via QR sign-in.
+
+        POST /api/edge/signin
+
+        Args:
+            user_id: User UUID from QR code
+            expires_at: ISO timestamp from QR code
+
+        Returns:
+            User info dict with user_id, user_name, email, role
+        """
+        logger.debug(f"QR sign-in for user: {user_id[:8]}...")
+
+        result = self._request('POST', '/api/edge/signin', json={
+            'user_id': user_id,
+            'expires_at': expires_at,
+        })
+
+        return result
+
+    def reconcile(self, cabinet_id: int, scanned_tags: list,
+                  missing_items: list = None,
+                  recovered_items: list = None) -> Dict[str, Any]:
+        """
+        Send inventory reconciliation data to server.
+
+        POST /api/edge/reconcile
+
+        Args:
+            cabinet_id: Cabinet identifier
+            scanned_tags: All RFID tags detected in scan
+            missing_items: Items that were expected but not found
+            recovered_items: Items that were MISSING and reappeared
+
+        Returns:
+            Server response with reconciliation result
+        """
+        logger.info(
+            f"Sending reconciliation: {len(scanned_tags)} scanned, "
+            f"{len(missing_items or [])} missing, {len(recovered_items or [])} recovered"
+        )
+
+        result = self._request('POST', '/api/edge/reconcile', json={
+            'cabinet_id': cabinet_id,
+            'scanned_tags': scanned_tags,
+            'missing_items': missing_items or [],
+            'recovered_items': recovered_items or [],
+            'total_scanned': len(scanned_tags),
+        })
+
         return result

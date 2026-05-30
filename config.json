@@ -1,17 +1,29 @@
 {
     "server_url": "https://save4223.isd-hub.com",
     "edge_secret": "edge_device_secret_key",
-    "cabinet_id": 7,
+    "cabinet_id": 1,
     "db_path": "./data/local.db",
     "session_timeout": 60,
     "rfid_scan_count": 5,
     "rfid": {
-        "voting_cycles": 10,
+        "voting_cycles": 15,
         "min_appearances": 1,
-        "read_interval": 2.0,
-        "idle_break_timeout": 1.0,
-        "max_cycle_wait": 3.0,
-        "log_each_cycle": true
+        "read_interval": 0.3,
+        "idle_break_timeout": 0.3,
+        "max_cycle_wait": 0.5,
+        "log_each_cycle": true,
+        "scan_duration": 3.0
+    },
+    "rfid_inventory": {
+        "scan_passes": 3,
+        "pass_duration": 3.0,
+        "quick_passes": 1,
+        "quick_duration": 2.0,
+        "antennas": [0,1],
+        "ant_repeat": 2,
+        "loop_count": 12,
+        "sessions": [0,1,2,3],
+        "description": "sessions=[0,1,2,3] enables multi-session union scan (S0-S3) to break the single-session ceiling. Total scan time ~= len(sessions)*len(antennas)*pass_duration; antenna 1 is a subset of antenna 0 in this cabinet, so set antennas=[0] to halve scan time. Remove 'sessions' or set [1] to revert to dual-antenna fast-switch (0x8A)."
     },
     "sync_interval": 60,
     "num_drawers": 4,
