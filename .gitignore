@@ -11,3 +11,6 @@ data/
 .venv/
 uv.lock
 .python-version
+
+# Vendor SDK bundle (large binaries: .exe/.dll/.apk/.rar/.zip + nested .claude)
+ZTX-RM702*/

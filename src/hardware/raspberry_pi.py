@@ -264,6 +264,7 @@ class RFIDReader:
         self._max_cycle_wait = 2.0
         self._tag_callback = None  # Optional callback for tag detection
         self._reader_configured = False  # set power/freq only once (persists in reader Flash)
+        self.tag_rssi: Dict[str, int] = {}  # EPC -> last-seen RSSI in dBm (diagnostics)
 
     def connect(self) -> bool:
         """Connect to RFID reader; configure power/frequency once (settings persist in Flash)."""
@@ -471,6 +472,10 @@ class RFIDReader:
         loop_count: Optional[int] = None,
         return_details: bool = False,
         sessions: Optional[List[int]] = None,
+        gapless: bool = False,
+        settle_ms: int = 700,
+        max_seconds: Optional[float] = None,
+        min_seconds: float = 1.0,
     ) -> Union[List[str], Dict[str, Any]]:
         """
         Inventory-optimized RFID scan with multi-antenna support.
@@ -539,6 +544,39 @@ class RFIDReader:
                     break
         except (socket.timeout, Exception):
             pass
+
+        # Gapless mode (SDK-style): one continuous, re-armed fast-switch stream
+        # with convergence early-exit, instead of fixed passes + cooldowns.
+        if gapless and multi_ant:
+            budget = max_seconds if max_seconds is not None else (
+                scan_passes * pass_duration
+            )
+            try:
+                result = self._fast_switch_union_scan(
+                    antennas=antennas,
+                    max_seconds=budget,
+                    settle_ms=settle_ms,
+                    min_seconds=min_seconds,
+                    ant_repeat=ant_repeat,
+                )
+            finally:
+                self.disconnect()
+            all_tags.update(result['tags'])
+            tag_counter.update(result['tag_count'])
+            sorted_tags = sorted(all_tags, key=lambda t: tag_counter[t], reverse=True)
+            logger.info(
+                f"Gapless inventory complete: {len(sorted_tags)} tags in "
+                f"{result.get('elapsed', 0):.2f}s ({result.get('arms', 0)} arms)"
+            )
+            if return_details:
+                return {
+                    'tags': sorted_tags,
+                    'pass_details': [len(sorted_tags)],
+                    'tag_counter': dict(tag_counter),
+                    'elapsed': result.get('elapsed'),
+                    'arms': result.get('arms'),
+                }
+            return sorted_tags
 
         try:
             for pass_num in range(scan_passes):
@@ -733,6 +771,136 @@ class RFIDReader:
                 'bytes_received': bytes_received,
                 'frames_parsed': frames_parsed,
             }
+
+    def _fast_switch_union_scan(
+        self,
+        antennas: List[int],
+        max_seconds: float = 6.0,
+        settle_ms: int = 700,
+        min_seconds: float = 1.0,
+        ant_repeat: int = 2,
+        arm_loop_count: int = 0xFF,
+    ) -> Dict[str, Any]:
+        """Continuous fast-switch (0x8A) union scan with convergence early-exit.
+
+        Mirrors the vendor SDK's `loopCount=-1` discipline: issue ONE 0x8A with
+        the max loop count so the reader runs a single, uninterrupted inventory
+        whose Gen2 anti-collision (Q) settles deeply - this is what lets the
+        physically-weak tags eventually win a slot. Re-arming every few loops
+        (the previous design) kept restarting Q from scratch and starved those
+        weak tags. We read the stream in ~0.3s chunks, accumulate a union, and
+        check convergence IN-STREAM: stop once no new EPC has appeared for
+        `settle_ms` (after a `min_seconds` floor) or `max_seconds` is hit. The
+        reader is only re-armed if it actually goes idle (its loops ran out).
+
+        Returns the same shape as _fast_switch_ant_scan plus 'elapsed'/'arms'.
+        """
+        from collections import defaultdict
+
+        tag_count: Dict[str, int] = defaultdict(int)
+        bytes_received = 0
+        frames_parsed = 0
+        arms = 0
+        self.work_mode_tags.clear()
+        self._recv_buffer.clear()
+
+        if not self.connected:
+            return {'tags': [], 'tag_count': {}, 'bytes_received': 0, 'frames_parsed': 0,
+                    'elapsed': 0.0, 'arms': 0}
+
+        # Drain any leftover bytes so the first arm starts clean.
+        try:
+            self.socket.settimeout(0.1)
+            while self.socket.recv(4096):
+                pass
+        except (socket.timeout, Exception):
+            pass
+        self._recv_buffer.clear()
+
+        # Build the 0x8A packet once (4 antenna slots, unused = 0x04/skip).
+        ant_slots = list(antennas[:4])
+        while len(ant_slots) < 4:
+            ant_slots.append(0x04)
+        loops = max(1, min(arm_loop_count, 0xFF))
+        data = bytes([
+            ant_slots[0], ant_repeat if ant_slots[0] != 0x04 else 0x00,
+            ant_slots[1], ant_repeat if ant_slots[1] != 0x04 else 0x00,
+            ant_slots[2], ant_repeat if ant_slots[2] != 0x04 else 0x00,
+            ant_slots[3], ant_repeat if ant_slots[3] != 0x04 else 0x00,
+            0x00,            # rest_time between antenna switches
+            loops & 0xFF,    # loops per arm
+        ])
+        packet = self._build_packet(0x8A, data)
+
+        logger.info(
+            f"Gapless union scan: antennas={antennas}, repeat={ant_repeat}, "
+            f"loops/arm={loops}, max={max_seconds}s, settle={settle_ms}ms"
+        )
+
+        start_time = time.time()
+        last_new_time = start_time
+        try:
+            # Start the single continuous inventory.
+            self.socket.sendall(packet)
+            arms = 1
+
+            chunk_idle = 0.3
+            while (time.time() - start_time) < max_seconds:
+                try:
+                    self.socket.settimeout(chunk_idle)
+                    recv_data = self.socket.recv(4096)
+                    if recv_data:
+                        bytes_received += len(recv_data)
+                        self._recv_buffer.extend(recv_data)
+                        frames_parsed += self._extract_frames_from_buffer()
+                        # Merge newly-seen tags into the union; reset the settle
+                        # timer only when a brand-new EPC appears.
+                        for tag in set(self.work_mode_tags):
+                            if tag not in tag_count:
+                                last_new_time = time.time()
+                            tag_count[tag] += 1
+                        self.work_mode_tags.clear()
+                    else:
+                        # Reader idle: its loops ran out -> re-arm to stay gapless.
+                        self.socket.sendall(packet)
+                        arms += 1
+                except socket.timeout:
+                    # Quiet chunk: reader likely finished its loops -> re-arm.
+                    self.socket.sendall(packet)
+                    arms += 1
+                except Exception as e:
+                    logger.error(f"Continuous scan receive error: {e}")
+                    break
+
+                # Convergence: stop once the set has been stable for settle_ms
+                # (but always read at least min_seconds to survive a slow start).
+                now = time.time()
+                if (now - start_time) >= min_seconds and \
+                        (now - last_new_time) * 1000.0 >= settle_ms:
+                    break
+        except Exception as e:
+            logger.error(f"Continuous union scan error: {e}")
+
+        if self._recv_buffer:
+            frames_parsed += self._extract_frames_from_buffer()
+            for tag in self.work_mode_tags:
+                tag_count[tag] += 1
+            self.work_mode_tags.clear()
+
+        elapsed = time.time() - start_time
+        detected = list(tag_count.keys())
+        logger.info(
+            f"Gapless union scan complete: {len(detected)} tags in {elapsed:.2f}s "
+            f"({arms} arms, {bytes_received} bytes, {frames_parsed} frames)"
+        )
+        return {
+            'tags': detected,
+            'tag_count': dict(tag_count),
+            'bytes_received': bytes_received,
+            'frames_parsed': frames_parsed,
+            'elapsed': elapsed,
+            'arms': arms,
+        }
 
     def read_rfid_tags_voting(
         self,
@@ -1308,6 +1476,7 @@ class RFIDReader:
             rssi_dbm = rssi_byte - 129
             if self._validate_epc(epc_hex) and epc_hex not in IGNORED_TAGS:
                 self.work_mode_tags.add(epc_hex)
+                self.tag_rssi[epc_hex] = rssi_dbm
                 logger.debug(f"Tag: EPC={epc_hex}, RSSI={rssi_dbm}dBm (raw=0x{rssi_byte:02X})")
                 if self._tag_callback:
                     self._tag_callback(epc_hex)

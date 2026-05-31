@@ -891,9 +891,14 @@ class SmartCabinet:
         ant_repeat = rfid_cfg.get('ant_repeat', 3)
         loop_count = rfid_cfg.get('loop_count', 10)
         sessions = rfid_cfg.get('sessions')
+        gapless = rfid_cfg.get('gapless', False)
+        settle_ms = rfid_cfg.get('settle_ms', 700)
+        max_seconds = rfid_cfg.get('max_seconds')
+        min_seconds = rfid_cfg.get('min_seconds', 1.0)
 
         logger.info(
-            "Starting RFID inventory scan (%s passes x %ss each, antennas=%s, repeat=%s, loops=%s, sessions=%s)",
+            "Starting RFID inventory scan (gapless=%s, %s passes x %ss each, antennas=%s, repeat=%s, loops=%s, sessions=%s)",
+            gapless,
             scan_passes,
             pass_duration,
             antennas,
@@ -908,6 +913,10 @@ class SmartCabinet:
             ant_repeat=ant_repeat,
             loop_count=loop_count,
             sessions=sessions,
+            gapless=gapless,
+            settle_ms=settle_ms,
+            max_seconds=max_seconds,
+            min_seconds=min_seconds,
         )
         logger.info(f"RFID inventory scan complete: {len(result)} unique tags detected")
         return result

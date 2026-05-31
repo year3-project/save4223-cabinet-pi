@@ -23,7 +23,11 @@
         "ant_repeat": 2,
         "loop_count": 12,
         "sessions": [1],
-        "description": "sessions=[1] uses dual-antenna fast-switch (0x8A) — hardware-verified to read 100% of tags deterministically (78/78 across 6 rounds, ~18s). Multi-session (sessions=[0,1,2,3]) was found to add ZERO tags on real hardware while costing ~55% more time, so it is disabled; set >1 session only to re-enable the union-scan fallback. The old 'single-session ceiling' was never reproduced on hardware."
+        "gapless": true,
+        "settle_ms": 4000,
+        "min_seconds": 10.0,
+        "max_seconds": 18.0,
+        "description": "sessions=[1] uses dual-antenna fast-switch (0x8A). gapless=true uses the SDK-style continuous re-armed scan: the reader inventories without idle gaps or inter-pass cooldowns and stops as soon as the unique-tag set is stable for settle_ms (no new EPC), capped at max_seconds. This replaces the fixed scan_passes x pass_duration schedule when gapless=true (scan_passes/pass_duration/cooldown then only apply to the legacy fallback). Multi-session (sessions=[0,1,2,3]) added ZERO tags on hardware while costing ~55% more time, so it stays disabled."
     },
     "sync_interval": 60,
     "num_drawers": 4,
