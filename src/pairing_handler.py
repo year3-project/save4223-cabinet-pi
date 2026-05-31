@@ -267,6 +267,20 @@ class PairingHandler:
                     ttl=86400 * 30  # 30 days
                 )
 
+                # Immediately enrich cache with full profile via authorize()
+                # The pairing API may not return userName/email, but authorize() will.
+                try:
+                    full_profile = self.api.authorize(card_uid, cabinet_id)
+                    if full_profile.get('authorized'):
+                        self.db.cache_auth(
+                            card_uid=card_uid,
+                            auth_result=full_profile,
+                            ttl=86400 * 30  # 30 days
+                        )
+                        logger.info(f"Enriched auth cache for {card_uid[:10]}... via authorize()")
+                except APIError as e:
+                    logger.debug(f"Post-pairing authorize() failed (non-critical): {e}")
+
                 return PairingResult(
                     success=True,
                     message=result.get('message', 'Card paired successfully'),

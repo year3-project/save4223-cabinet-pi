@@ -313,35 +313,72 @@ class RFIDReader:
         except Exception as e:
             logger.warning(f"RFID initialization warning: {e}")
 
-    def _set_frequency_region(self):
-        """Set frequency region to custom range (865-928MHz).
+    def _read_response_status(self, cmd: int, timeout: float = 0.5) -> Optional[int]:
+        """Read a command-ack frame for `cmd` and return its ErrorCode byte.
 
-        The reader hardware physically maxes out at 928MHz. Frequencies above
-        that cause PLL lock failures (0x52) and periodic read blind spots.
+        Ack frame: [0xA0][Len=0x04][Addr][cmd][ErrorCode][Check].
+        ErrorCode 0x10 = command_success (manual V4.1.7 p.38); any other value
+        means the reader rejected the command. Returns the ErrorCode, or None if
+        no matching frame arrived.
+        """
+        if not self.socket:
+            return None
+        self.socket.settimeout(timeout)
+        buf = b''
+        try:
+            while True:
+                chunk = self.socket.recv(4096)
+                if not chunk:
+                    break
+                buf += chunk
+        except socket.timeout:
+            pass
+        # Scan for an [A0 .. cmd] frame; the byte right after cmd is the ErrorCode.
+        for i in range(len(buf) - 4):
+            if buf[i] == 0xA0 and buf[i + 3] == cmd:
+                return buf[i + 4]
+        return None
 
-        Command 0x78 (set frequency region), mode 2 (user defined):
-            Data: [mode] [start_freq_2] [start_freq_1] [start_freq_0]
-                  [freq_space] [freq_quantity_H] [freq_quantity_L]
+    def _set_frequency_region(self) -> bool:
+        """Set a custom 865-928MHz hopping spectrum (command 0x78, method 2).
+
+        Manual V4.1.7 p.12, method 2 (user-defined spectrum) data layout:
+            [Region=0x04][FreqSpace][FreqQuantity][StartFreq high..low (3 bytes)]
+          - Region: fixed 0x04 (NOT a regulatory code; 0x01/0x02/0x03 select the
+            method-1 system-default bands and would misparse this payload).
+          - FreqSpace: spacing / 10KHz, 1 byte.
+          - FreqQuantity: channel count, 1 byte (>0, <=255).
+          - StartFreq: KHz, big-endian 3 bytes.
+
+        Plan: start 865000KHz, 250KHz spacing, 253 channels -> 865.0..928.0MHz.
+        253 is the densest channel count that still fits FreqQuantity in one
+        byte; the reader hardware tops out at 928MHz so the band is not pushed
+        higher. The reader acks with [..78][ErrorCode]; 0x10 = command_success.
         """
         try:
-            # 865000 KHz = 0x0D32E8, high byte first
-            start_freq = bytes([0x0D, 0x32, 0xE8])
-            freq_space = bytes([0x14])              # 20 -> 200 KHz interval
-            freq_quantity = bytes([0x01, 0x3C])     # 316 channels -> 865~928MHz
+            start_freq = (865000).to_bytes(3, 'big')   # 0x0D32E8
+            freq_space = 0x19                           # 25 -> 250 KHz spacing
+            freq_quantity = 0xFD                         # 253 channels -> 928.0MHz
 
-            data = bytes([0x02]) + start_freq + freq_space + freq_quantity
+            data = bytes([0x04, freq_space, freq_quantity]) + start_freq
             packet = self._build_packet(0x78, data)
-            if self.socket:
-                self.socket.sendall(packet)
-                time.sleep(0.1)
-                self.socket.settimeout(0.5)
-                try:
-                    self.socket.recv(4096)
-                except socket.timeout:
-                    pass
-            logger.info("RFID frequency set to custom 865-928MHz (316 channels, 200KHz spacing)")
+            if not self.socket:
+                return False
+            self.socket.sendall(packet)
+            time.sleep(0.1)
+            status = self._read_response_status(0x78)
+            if status == 0x10:
+                logger.info("RFID frequency set to 865-928MHz (253 channels, 250KHz spacing)")
+                return True
+            status_str = f"0x{status:02X}" if status is not None else "no response"
+            logger.error(
+                f"RFID set-frequency (0x78) rejected: ErrorCode={status_str} - "
+                "reader stays on its previous frequency plan"
+            )
+            return False
         except Exception as e:
             logger.warning(f"Failed to set frequency region: {e}")
+            return False
 
     def _set_antenna(self, ant_id: int):
         """Select active antenna on the RFID reader.
@@ -401,16 +438,14 @@ class RFIDReader:
             packet = self._build_packet(0x76, bytes([power_dbm & 0xFF]))
             if self.socket:
                 self.socket.sendall(packet)
-                # Wait briefly for response
                 time.sleep(0.1)
-                # Read and discard response
-                self.socket.settimeout(0.5)
-                try:
-                    self.socket.recv(256)
-                except socket.timeout:
-                    pass
-                logger.info(f"RFID output power set to {power_dbm}dBm (0x{power_dbm:02X})")
-                return True
+                status = self._read_response_status(0x76)
+                if status == 0x10:
+                    logger.info(f"RFID output power set to {power_dbm}dBm (0x{power_dbm:02X})")
+                    return True
+                status_str = f"0x{status:02X}" if status is not None else "no response"
+                logger.error(f"RFID set-power (0x76) rejected: ErrorCode={status_str}")
+                return False
         except Exception as e:
             logger.warning(f"Failed to set RFID power: {e}")
         return False

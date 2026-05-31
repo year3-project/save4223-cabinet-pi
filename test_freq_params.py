@@ -5,13 +5,16 @@ Tries different frequency region configurations on the reader and compares
 tag detection rates.  Each config is tested with multiple scan passes; the
 script reports total unique tags and per-pass consistency.
 
-Frequency region command 0x78, mode 2 (user-defined spectrum):
-  Data: [0x02] [start_freq_2] [start_freq_1] [start_freq_0]
-        [freq_space] [freq_quantity_H] [freq_quantity_L]
+Frequency region command 0x78, method 2 (user-defined spectrum), per
+manual V4.1.7 p.12:
+  Data: [0x04] [freq_space] [freq_quantity]
+        [start_freq_2] [start_freq_1] [start_freq_0]
 
-  - start_freq: 3-byte big-endian, unit = KHz
-  - freq_space: 1 byte, unit = 10 KHz  (e.g. 0x14 = 200 KHz)
-  - freq_quantity: 2-byte big-endian, number of channels
+  - region:        fixed 0x04 (method 2). NOT 0x01/0x02/0x03 - those are the
+                   method-1 system-default bands and would misparse this payload.
+  - freq_space:    1 byte, unit = 10 KHz  (e.g. 0x14 = 200 KHz)
+  - freq_quantity: 1 byte, number of channels (>0, <=255)
+  - start_freq:    3-byte big-endian, unit = KHz
 
 Usage:
     uv run test_freq_params.py
@@ -37,22 +40,17 @@ from hardware.raspberry_pi import RFIDReader, RFID_HOST, RFID_PORT, RFID_ADDRESS
 # The script calculates channel count automatically.
 
 FREQ_CONFIGS = [
-    # --- Compare 865-928 vs 865-960 ---
-    ("865-928 200kHz (316ch)",   865000, 200, 928000),
-    ("865-960 200kHz (476ch)",   865000, 200, 960000),
+    # FreqQuantity is one byte (<=255 channels), so every config below stays
+    # within that limit - the old 316ch/476ch entries were impossible and the
+    # reader rejected them.
+    # --- 865-928 band, varying channel density ---
+    ("865-928 250kHz (253ch)",   865000, 250, 928000),   # densest that fits 1 byte
+    ("865-928 500kHz (127ch)",   865000, 500, 928000),
+    ("865-928 2.5MHz (26ch)",    865000, 2500, 928000),  # ~factory-default density
 
-    # # --- narrower range, denser channels ---
-    # ("865-940 100kHz",   865000, 100, 940000),
-    # ("865-928 100kHz",   865000, 100, 928000),
-    #
-    # # --- extend upper bound ---
-    # ("865-960 100kHz",   865000, 100, 960000),
-    #
-    # # --- FCC ISM band centered ---
-    # ("902-928 200kHz",   902000, 200, 928000),
-    # ("902-928 100kHz",   902000, 100, 928000),
-    # ("902-960 200kHz",   902000, 200, 960000),
-    # ("902-960 100kHz",   902000, 100, 960000),
+    # # --- FCC ISM band only (902-928) ---
+    # ("902-928 250kHz (105ch)",  902000, 250, 928000),
+    # ("902-928 500kHz (53ch)",   902000, 500, 928000),
 ]
 
 # ---------------------------------------------------------------------------
@@ -65,16 +63,19 @@ def khz_to_3bytes(khz: int) -> bytes:
 
 
 def build_freq_command(start_khz: int, spacing_khz: int, end_khz: int) -> bytes:
-    """Build the data payload for command 0x78 mode 2."""
-    start = khz_to_3bytes(start_khz)
-    space_val = spacing_khz // 10          # unit = 10 KHz
-    n_channels = (end_khz - start_khz) // spacing_khz
-    return (
-        bytes([0x02])
-        + start
-        + bytes([space_val & 0xFF])
-        + n_channels.to_bytes(2, 'big')
-    )
+    """Build the data payload for command 0x78 method 2 (user-defined spectrum).
+
+    Manual V4.1.7 p.12: [Region=0x04][FreqSpace][FreqQuantity][StartFreq x3].
+    FreqQuantity is ONE byte (max 255), so wide bands need coarser spacing.
+    """
+    space_val = spacing_khz // 10                       # unit = 10 KHz
+    n_channels = (end_khz - start_khz) // spacing_khz + 1  # inclusive of start
+    if not (0 < n_channels <= 255):
+        raise ValueError(
+            f"channel count {n_channels} out of range 1..255 - widen spacing "
+            f"or narrow the band ({start_khz}-{end_khz}KHz @ {spacing_khz}KHz)"
+        )
+    return bytes([0x04, space_val & 0xFF, n_channels & 0xFF]) + khz_to_3bytes(start_khz)
 
 
 def send_freq_config(reader: RFIDReader, start_khz: int, spacing_khz: int, end_khz: int):
@@ -131,7 +132,7 @@ def main():
     results = {}
 
     for idx, (label, start, spacing, end) in enumerate(FREQ_CONFIGS):
-        n_ch = (end - start) // spacing
+        n_ch = (end - start) // spacing + 1
         print(f"\n[{idx+1}/{len(FREQ_CONFIGS)}] {label}  ({n_ch} channels, {start//1000}-{end//1000} MHz)")
         print("-" * 55)
 

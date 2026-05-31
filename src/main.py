@@ -345,7 +345,11 @@ class SmartCabinet:
     def _handle_auth_success(self, result: Dict[str, Any]):
         """Handle successful authentication."""
         self.current_user_id = result['user_id']
-        self.current_user_name = result.get('user_name', 'Unknown')
+        user_name = result.get('user_name', 'Unknown')
+        # Fallback: prefer email over 'Unknown' for display
+        if (not user_name or user_name == 'Unknown') and result.get('email'):
+            user_name = result['email']
+        self.current_user_name = user_name
         self.session_id = str(uuid.uuid4())
         self.session_start_time = datetime.now()
 
@@ -458,11 +462,16 @@ class SmartCabinet:
             tags_found=start_tags
         )
 
+        if self.current_card_uid:
+            close_hint = 'tap your NFC card again to close'
+        else:
+            close_hint = 'scan your QR code again to close'
+
         self._send_to_display({
             'type': 'STATE_CHANGE',
             'state': 'UNLOCKED',
             'user': {'name': self.current_user_name} if self.current_user_name else None,
-            'message': f'Welcome {self.current_user_name}! Take or return tools, then tap card again to close.',
+            'message': f'Welcome {self.current_user_name}! Take or return tools, then {close_hint}.',
             'session_id': self.session_id,
             'start_tags': len(start_tags)
         })
@@ -472,10 +481,42 @@ class SmartCabinet:
         session_timeout = CONFIG.get('session_timeout', 300)  # 5 minutes default
 
         while self.running and (time.time() - unlock_time) < session_timeout:
-            # Check if same card scanned (close command)
-            card = self.hardware.read_nfc(timeout=0.5)
+            # Check for close command via NFC card tap or QR scan
+            close_requested = False
 
-            if card is not None and card == self.current_card_uid:
+            # Use read_card_auto to detect both NFC and QR from the shared reader
+            hid_reader = getattr(self.hardware, '_hid_reader', None)
+            if hid_reader and hid_reader.is_available():
+                result = self.hardware.read_card_auto(timeout=0.5)
+                if result:
+                    if result['type'] == 'nfc':
+                        card = result['data']
+                        # NFC close: same card that opened the session
+                        if card == self.current_card_uid:
+                            close_requested = True
+                    elif result['type'] == 'qr':
+                        # QR sign-out: same user who opened the session
+                        signin_data = self.pairing_handler.extract_signin_from_qr(result['data'])
+                        if signin_data and signin_data['user_id'] == self.current_user_id:
+                            logger.info("QR sign-out: same user scanned sign-in QR")
+                            close_requested = True
+            else:
+                # Non-HID fallback: check NFC and QR separately
+                # NFC card close
+                card = self.hardware.read_nfc(timeout=0.3)
+                if card is not None and card == self.current_card_uid:
+                    close_requested = True
+
+                # QR sign-out (for sessions opened without card)
+                if not close_requested and not self.current_card_uid:
+                    qr = self.hardware.read_qr(timeout=0.2)
+                    if qr:
+                        signin_data = self.pairing_handler.extract_signin_from_qr(qr)
+                        if signin_data and signin_data['user_id'] == self.current_user_id:
+                            logger.info("QR sign-out: same user scanned sign-in QR")
+                            close_requested = True
+
+            if close_requested:
                 if self.hardware.are_all_drawers_closed():
                     logger.info("Close command received, all drawers closed")
                     self._send_to_display({
@@ -801,6 +842,13 @@ class SmartCabinet:
                 'message': result.message,
                 'user_id': result.user_id
             })
+
+            # Trigger background sync to refresh auth cache with latest user data
+            try:
+                self.sync_worker.sync_inventory_cache()
+            except Exception as e:
+                logger.debug(f"Post-pairing sync failed (non-critical): {e}")
+
             time.sleep(3)
         else:
             logger.warning(f"Pairing failed: {result.message}")

@@ -17,10 +17,11 @@ def main():
     antennas = rfid_cfg.get('antennas', [0, 1])
     ant_repeat = rfid_cfg.get('ant_repeat', 3)
     loop_count = rfid_cfg.get('loop_count', 10)
+    sessions = rfid_cfg.get('sessions')
 
     total_runs = 100
     print(f"RFID Stress Test: {total_runs} runs")
-    print(f"  Config: {scan_passes} passes x {pass_duration}s, antennas={antennas}, repeat={ant_repeat}, loops={loop_count}")
+    print(f"  Config: {scan_passes} passes x {pass_duration}s, antennas={antennas}, repeat={ant_repeat}, loops={loop_count}, sessions={sessions}")
     print("=" * 60)
 
     reader = RFIDReader(RFID_HOST, RFID_PORT)
