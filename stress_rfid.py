@@ -18,10 +18,22 @@ def main():
     ant_repeat = rfid_cfg.get('ant_repeat', 3)
     loop_count = rfid_cfg.get('loop_count', 10)
     sessions = rfid_cfg.get('sessions')
+    # Mirror production (main.py): same gapless params from config so a stress
+    # run reproduces exactly one production door-close scan per iteration.
+    gapless = rfid_cfg.get('gapless', False)
+    settle_ms = rfid_cfg.get('settle_ms', 700)
+    min_seconds = rfid_cfg.get('min_seconds', 1.0)
+    max_seconds = rfid_cfg.get('max_seconds')
 
     total_runs = 100
-    print(f"RFID Stress Test: {total_runs} runs")
-    print(f"  Config: {scan_passes} passes x {pass_duration}s, antennas={antennas}, repeat={ant_repeat}, loops={loop_count}, sessions={sessions}")
+    mode = "GAPLESS continuous" if gapless else f"LEGACY {scan_passes}-pass"
+    print(f"RFID Stress Test: {total_runs} runs  [{mode}]")
+    if gapless:
+        print(f"  Config: antennas={antennas}, repeat={ant_repeat}, "
+              f"settle={settle_ms}ms, min={min_seconds}s, max={max_seconds}s, sessions={sessions}")
+    else:
+        print(f"  Config: {scan_passes} passes x {pass_duration}s, antennas={antennas}, "
+              f"repeat={ant_repeat}, loops={loop_count}, sessions={sessions}")
     print("=" * 60)
 
     reader = RFIDReader(RFID_HOST, RFID_PORT)
@@ -30,34 +42,41 @@ def main():
         return 1
 
     results = []
+    times = []
     try:
         for i in range(1, total_runs + 1):
+            t0 = time.time()
             detail = reader.read_rfid_tags_inventory(
                 scan_passes=scan_passes,
                 pass_duration=pass_duration,
                 antennas=antennas,
                 ant_repeat=ant_repeat,
                 loop_count=loop_count,
+                sessions=sessions,
+                gapless=gapless,
+                settle_ms=settle_ms,
+                min_seconds=min_seconds,
+                max_seconds=max_seconds,
                 return_details=True,
             )
+            dt = time.time() - t0
             tags = detail['tags']
-            pass_details = detail['pass_details']
-            tag_counter = detail['tag_counter']
             count = len(tags)
             results.append(count)
+            times.append(dt)
             avg = sum(results) / len(results)
-            min_c = min(results)
-            max_c = max(results)
-            pass_str = ', '.join(f'P{j+1}={n}' for j, n in enumerate(pass_details))
-            print(f"  [{i:3d}/{total_runs}] {count} tags ({pass_str})  (avg={avg:.1f}, min={min_c}, max={max_c})")
+            print(f"  [{i:3d}/{total_runs}] {count} tags in {dt:5.2f}s  "
+                  f"(avg={avg:.1f}, min={min(results)}, max={max(results)})")
     except KeyboardInterrupt:
         print(f"\n  Interrupted after {len(results)} runs")
     finally:
         reader.disconnect()
 
     print("\n" + "=" * 60)
-    print(f"RESULTS: {len(results)} runs completed")
-    print(f"  Avg: {sum(results)/len(results):.1f}  Min: {min(results)}  Max: {max(results)}")
+    print(f"RESULTS: {len(results)} runs completed  [{mode}]")
+    print(f"  Tags: avg={sum(results)/len(results):.2f}  min={min(results)}  max={max(results)}")
+    if times:
+        print(f"  Time: avg={sum(times)/len(times):.2f}s  min={min(times):.2f}  max={max(times):.2f}")
     return 0
 
 if __name__ == '__main__':

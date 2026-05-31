@@ -314,6 +314,54 @@ class RFIDReader:
         except Exception as e:
             logger.warning(f"RFID initialization warning: {e}")
 
+    def _drain_socket(self, max_seconds: float = 0.5) -> None:
+        """Discard buffered/in-flight bytes, bounded by wall-clock.
+
+        A continuously-streaming reader (e.g. an inventory from a killed/early-
+        stopped scan still running its loops) would trap an unbounded `while
+        recv()` loop forever, since recv never empties or times out. The
+        deadline guarantees we give up and move on; the next inventory command
+        we send aborts the stale run anyway.
+        """
+        if not self.socket:
+            return
+        deadline = time.time() + max_seconds
+        self.socket.settimeout(0.1)
+        while time.time() < deadline:
+            try:
+                if not self.socket.recv(4096):
+                    break
+            except socket.timeout:
+                break
+            except Exception:
+                break
+
+    def _halt_inventory(self, antennas: List[int]) -> None:
+        """Best-effort stop of a running multi-loop 0x8A inventory.
+
+        The reader has no soft-stop opcode and only halts when its loop count
+        runs out, so a long (loops=0xFF) gapless scan would keep streaming for a
+        long time after we stop reading. Issuing a fresh 1-loop 0x8A supersedes
+        the running inventory; the reader does one short loop and stops. We then
+        drain the brief tail. Failures are ignored - the bounded drains on the
+        next scan recover regardless.
+        """
+        if not self.socket:
+            return
+        try:
+            ant = list(antennas[:4])
+            while len(ant) < 4:
+                ant.append(0x04)
+            data = bytes([
+                ant[0], 1 if ant[0] != 0x04 else 0, ant[1], 1 if ant[1] != 0x04 else 0,
+                ant[2], 1 if ant[2] != 0x04 else 0, ant[3], 1 if ant[3] != 0x04 else 0,
+                0x00, 0x01,   # rest=0, loops=1 -> one short loop then stop
+            ])
+            self.socket.sendall(self._build_packet(0x8A, data))
+            self._drain_socket(0.6)
+        except Exception:
+            pass
+
     def _read_response_status(self, cmd: int, timeout: float = 0.5) -> Optional[int]:
         """Read a command-ack frame for `cmd` and return its ErrorCode byte.
 
@@ -324,24 +372,30 @@ class RFIDReader:
         """
         if not self.socket:
             return None
+        # Hard wall-clock deadline: if a prior (e.g. interrupted) inventory left
+        # the reader continuously streaming, recv never times out - bound it so
+        # this can't hang. Return as soon as the ack is found.
+        deadline = time.time() + timeout
         self.socket.settimeout(timeout)
         buf = b''
-        try:
-            while True:
+        while time.time() < deadline:
+            try:
                 chunk = self.socket.recv(4096)
                 if not chunk:
                     break
                 buf += chunk
-        except socket.timeout:
-            pass
-        # Scan for an [A0 .. cmd] frame; the byte right after cmd is the ErrorCode.
-        for i in range(len(buf) - 4):
-            if buf[i] == 0xA0 and buf[i + 3] == cmd:
-                return buf[i + 4]
+                # Scan incrementally; return the moment the cmd ack appears.
+                for i in range(len(buf) - 4):
+                    if buf[i] == 0xA0 and buf[i + 3] == cmd:
+                        return buf[i + 4]
+            except socket.timeout:
+                break
+            except Exception:
+                break
         return None
 
     def _set_frequency_region(self) -> bool:
-        """Set a custom 865-928MHz hopping spectrum (command 0x78, method 2).
+        """Set a custom 865-960MHz hopping spectrum (command 0x78, method 2).
 
         Manual V4.1.7 p.12, method 2 (user-defined spectrum) data layout:
             [Region=0x04][FreqSpace][FreqQuantity][StartFreq high..low (3 bytes)]
@@ -351,15 +405,20 @@ class RFIDReader:
           - FreqQuantity: channel count, 1 byte (>0, <=255).
           - StartFreq: KHz, big-endian 3 bytes.
 
-        Plan: start 865000KHz, 250KHz spacing, 253 channels -> 865.0..928.0MHz.
-        253 is the densest channel count that still fits FreqQuantity in one
-        byte; the reader hardware tops out at 928MHz so the band is not pushed
-        higher. The reader acks with [..78][ErrorCode]; 0x10 = command_success.
+        Plan: 865000KHz start, 500KHz spacing, 191 channels -> 865.0..960.0MHz.
+        The reach to 960MHz is hardware-verified (the factory default ran to
+        957.5MHz, and a sweep confirmed the reader ACKs every band up to 960;
+        the old "928 hardware limit" comment was wrong). A wide 865-960 span
+        won the weak-tag sweep - wide frequency diversity moves the standing-
+        wave nulls, so a tag dead at one frequency is read at another. 191
+        channels keeps FreqQuantity within one byte. NOTE: 928-960MHz is above
+        the US FCC ISM band - only use this band where regulations allow.
+        The reader acks with [..78][ErrorCode]; 0x10 = command_success.
         """
         try:
             start_freq = (865000).to_bytes(3, 'big')   # 0x0D32E8
-            freq_space = 0x19                           # 25 -> 250 KHz spacing
-            freq_quantity = 0xFD                         # 253 channels -> 928.0MHz
+            freq_space = 0x32                           # 50 -> 500 KHz spacing
+            freq_quantity = 0xBF                         # 191 channels -> 960.0MHz
 
             data = bytes([0x04, freq_space, freq_quantity]) + start_freq
             packet = self._build_packet(0x78, data)
@@ -369,7 +428,7 @@ class RFIDReader:
             time.sleep(0.1)
             status = self._read_response_status(0x78)
             if status == 0x10:
-                logger.info("RFID frequency set to 865-928MHz (253 channels, 250KHz spacing)")
+                logger.info("RFID frequency set to 865-960MHz (191 channels, 500KHz spacing)")
                 return True
             status_str = f"0x{status:02X}" if status is not None else "no response"
             logger.error(
@@ -534,16 +593,9 @@ class RFIDReader:
         if not self.connect():
             return []
 
-        # Drain power command response and let reader settle
+        # Drain power command response and let reader settle (bounded).
         time.sleep(0.5)
-        try:
-            self.socket.settimeout(0.2)
-            while True:
-                drain = self.socket.recv(4096)
-                if not drain:
-                    break
-        except (socket.timeout, Exception):
-            pass
+        self._drain_socket(0.5)
 
         # Gapless mode (SDK-style): one continuous, re-armed fast-switch stream
         # with convergence early-exit, instead of fixed passes + cooldowns.
@@ -668,15 +720,8 @@ class RFIDReader:
         self.work_mode_tags.clear()
         self._recv_buffer.clear()
 
-        # Drain any leftover data from socket
-        try:
-            self.socket.settimeout(0.1)
-            while True:
-                drain = self.socket.recv(4096)
-                if not drain:
-                    break
-        except (socket.timeout, Exception):
-            pass
+        # Drain any leftover data from socket (bounded against a live stream).
+        self._drain_socket(0.3)
         self._recv_buffer.clear()
 
         # Loop count: use provided value or auto-compute
@@ -808,13 +853,9 @@ class RFIDReader:
             return {'tags': [], 'tag_count': {}, 'bytes_received': 0, 'frames_parsed': 0,
                     'elapsed': 0.0, 'arms': 0}
 
-        # Drain any leftover bytes so the first arm starts clean.
-        try:
-            self.socket.settimeout(0.1)
-            while self.socket.recv(4096):
-                pass
-        except (socket.timeout, Exception):
-            pass
+        # Drain any leftover bytes so the first arm starts clean (bounded:
+        # a prior early-stopped scan may have left the reader still streaming).
+        self._drain_socket(0.5)
         self._recv_buffer.clear()
 
         # Build the 0x8A packet once (4 antenna slots, unused = 0x04/skip).
@@ -880,6 +921,10 @@ class RFIDReader:
                     break
         except Exception as e:
             logger.error(f"Continuous union scan error: {e}")
+
+        # Brake the (possibly still-running loops=0xFF) inventory so the reader
+        # stops streaming promptly instead of running its loop count to the end.
+        self._halt_inventory(antennas)
 
         if self._recv_buffer:
             frames_parsed += self._extract_frames_from_buffer()

@@ -24,9 +24,9 @@
         "loop_count": 12,
         "sessions": [1],
         "gapless": true,
-        "settle_ms": 4000,
-        "min_seconds": 10.0,
-        "max_seconds": 18.0,
+        "settle_ms": 2000,
+        "min_seconds": 14.0,
+        "max_seconds": 16.0,
         "description": "sessions=[1] uses dual-antenna fast-switch (0x8A). gapless=true uses the SDK-style continuous re-armed scan: the reader inventories without idle gaps or inter-pass cooldowns and stops as soon as the unique-tag set is stable for settle_ms (no new EPC), capped at max_seconds. This replaces the fixed scan_passes x pass_duration schedule when gapless=true (scan_passes/pass_duration/cooldown then only apply to the legacy fallback). Multi-session (sessions=[0,1,2,3]) added ZERO tags on hardware while costing ~55% more time, so it stays disabled."
     },
     "sync_interval": 60,
