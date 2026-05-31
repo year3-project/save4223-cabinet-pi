@@ -1813,23 +1813,18 @@ class RaspberryPiHardware(HardwareInterface):
         loop_count: Optional[int] = None,
         return_details: bool = False,
         sessions: Optional[List[int]] = None,
+        gapless: bool = False,
+        settle_ms: int = 700,
+        max_seconds: Optional[float] = None,
+        min_seconds: float = 1.0,
     ) -> Union[List[str], Dict[str, Any]]:
         """
         Inventory-optimized RFID scan for stable counting.
 
-        Performs multiple scan passes across configured antennas and returns
-        union of all detected tags. When `sessions` has >1 entry, performs a
-        multi-session union scan (S0..S3) to recover tags hiding in one
-        session's already-inventoried state.
-
-        Args:
-            scan_passes: Number of scan passes (default 3)
-            pass_duration: Duration of each pass in seconds (default 5.0)
-            antennas: List of antenna IDs to cycle through
-            ant_repeat: Inventory rounds per antenna per loop (0x8A)
-            loop_count: Number of loops for fast-switch command (None = auto)
-            return_details: If True, return dict with per-pass info
-            sessions: Gen2 sessions to cycle (e.g. [0,1,2,3]); >1 enables multi-session
+        Thin wrapper over RFIDReader.read_rfid_tags_inventory; forwards every
+        parameter (including the gapless/settle_ms/min_seconds/max_seconds knobs
+        the gapless continuous scan uses) so callers going through the hardware
+        interface get identical behaviour to calling the reader directly.
 
         Returns:
             List of unique tags, or dict with details when return_details=True
@@ -1845,6 +1840,10 @@ class RaspberryPiHardware(HardwareInterface):
             loop_count=loop_count,
             sessions=sessions,
             return_details=return_details,
+            gapless=gapless,
+            settle_ms=settle_ms,
+            max_seconds=max_seconds,
+            min_seconds=min_seconds,
         )
 
     def unlock_drawer(self, drawer_id: int) -> bool:
