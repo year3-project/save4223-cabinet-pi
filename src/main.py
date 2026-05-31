@@ -562,7 +562,8 @@ class SmartCabinet:
         # Blue chase during RFID scan (matches test_hardware.py)
         self.hardware.led_pattern('chase', 'blue', duration=2.0)
 
-        # Capture end snapshot
+        # Capture end snapshot: 2 scans unioned, to backfill any marginal tag
+        # that one scan happened to miss (a tag seen in either scan = present).
         logger.info("Capturing end RFID snapshot...")
         end_tags = self._scan_rfid()
         logger.info(f"End tags: {end_tags}")
@@ -874,52 +875,44 @@ class SmartCabinet:
     # RFID Scanning
     # =================================================================================
 
+    def _scan_rfid_union(self, n_scans: int, label: str = "scan") -> list:
+        """Run `n_scans` gapless inventory scans and return the UNION of tags.
+
+        Each extra scan backfills physically-marginal tags an earlier scan
+        missed (per-scan hit rate ~85%). Union, NOT voting: a tag seen in ANY
+        scan counts as present - marginal tags only appear in some scans, so a
+        majority rule would wrongly drop them.
+        """
+        cfg = CONFIG.get('rfid_inventory', {})
+        n_scans = max(1, n_scans)
+        union = set()
+        per_scan = []
+        for i in range(n_scans):
+            scan = self.hardware.read_rfid_tags_inventory(
+                scan_passes=cfg.get('scan_passes', 3),
+                pass_duration=cfg.get('pass_duration', 5.0),
+                antennas=cfg.get('antennas'),
+                ant_repeat=cfg.get('ant_repeat', 3),
+                loop_count=cfg.get('loop_count', 10),
+                sessions=cfg.get('sessions'),
+                gapless=cfg.get('gapless', False),
+                settle_ms=cfg.get('settle_ms', 700),
+                max_seconds=cfg.get('max_seconds'),
+                min_seconds=cfg.get('min_seconds', 1.0),
+            )
+            before = len(union)
+            union.update(scan)
+            per_scan.append(len(scan))
+            logger.info("RFID %s %d/%d: %d tags, +%d new (union=%d)",
+                        label, i + 1, n_scans, len(scan), len(union) - before, len(union))
+        logger.info("RFID %s union: %d unique tags from %d scans %s",
+                    label, len(union), n_scans, per_scan)
+        return sorted(union)
+
     def _scan_rfid(self) -> list:
-        """
-        Perform RFID inventory scan with multi-pass, multi-antenna accumulation.
-
-        Uses multiple scan passes across configured antennas and returns the
-        union of all detected tags. With dual antennas each pass covers a
-        different physical area, improving read accuracy.
-
-        Parameters are configurable via CONFIG['rfid_inventory'].
-        """
-        rfid_cfg = CONFIG.get('rfid_inventory', {})
-        scan_passes = rfid_cfg.get('scan_passes', 3)
-        pass_duration = rfid_cfg.get('pass_duration', 5.0)
-        antennas = rfid_cfg.get('antennas')
-        ant_repeat = rfid_cfg.get('ant_repeat', 3)
-        loop_count = rfid_cfg.get('loop_count', 10)
-        sessions = rfid_cfg.get('sessions')
-        gapless = rfid_cfg.get('gapless', False)
-        settle_ms = rfid_cfg.get('settle_ms', 700)
-        max_seconds = rfid_cfg.get('max_seconds')
-        min_seconds = rfid_cfg.get('min_seconds', 1.0)
-
-        logger.info(
-            "Starting RFID inventory scan (gapless=%s, %s passes x %ss each, antennas=%s, repeat=%s, loops=%s, sessions=%s)",
-            gapless,
-            scan_passes,
-            pass_duration,
-            antennas,
-            ant_repeat,
-            loop_count,
-            sessions,
-        )
-        result = self.hardware.read_rfid_tags_inventory(
-            scan_passes=scan_passes,
-            pass_duration=pass_duration,
-            antennas=antennas,
-            ant_repeat=ant_repeat,
-            loop_count=loop_count,
-            sessions=sessions,
-            gapless=gapless,
-            settle_ms=settle_ms,
-            max_seconds=max_seconds,
-            min_seconds=min_seconds,
-        )
-        logger.info(f"RFID inventory scan complete: {len(result)} unique tags detected")
-        return result
+        """Inventory scan = `scan_count` gapless scans unioned (default 2)."""
+        cfg = CONFIG.get('rfid_inventory', {})
+        return self._scan_rfid_union(cfg.get('scan_count', 2), label="inventory")
 
     # =================================================================================
     # Main Loop
